@@ -1,0 +1,630 @@
+From 42d5ab749d6be6bee3bdaa18b33c834317d5f1da Mon Sep 17 00:00:00 2001
+From: korejan <64199710+korejan@users.noreply.github.com>
+Date: Sun, 31 Mar 2024 15:52:14 +0100
+Subject: [PATCH 10/14] xrt: Adds support for XR_META_body_tracking_calibration
+
+---
+ CMakeLists.txt                                |  6 +-
+ scripts/generate_oxr_ext_support.py           |  1 +
+ scripts/mapping.imp                           |  1 +
+ src/xrt/compositor/multi/comp_multi_system.c  |  1 +
+ src/xrt/include/CMakeLists.txt                |  1 +
+ src/xrt/include/xrt/xrt_compositor.h          |  1 +
+ .../include/xrt/xrt_config_build.h.cmake_in   |  1 +
+ src/xrt/include/xrt/xrt_defines.h             | 13 ++++
+ src/xrt/include/xrt/xrt_device.h              | 51 ++++++++++++++-
+ src/xrt/include/xrt/xrt_instance.h            |  1 +
+ src/xrt/include/xrt/xrt_openxr_includes.h     |  1 +
+ src/xrt/ipc/client/ipc_client_device.c        | 25 ++++++++
+ src/xrt/ipc/server/ipc_server_handler.c       | 20 ++++++
+ src/xrt/ipc/shared/proto.json                 | 13 ++++
+ .../oxr/oxr_api_body_tracking.c               | 64 +++++++++++++++++++
+ src/xrt/state_trackers/oxr/oxr_api_funcs.h    | 11 ++++
+ .../state_trackers/oxr/oxr_api_negotiate.c    |  5 ++
+ .../state_trackers/oxr/oxr_body_tracking.c    | 14 ++++
+ .../oxr/oxr_extension_support.h               | 13 ++++
+ src/xrt/state_trackers/oxr/oxr_instance.c     |  3 +
+ src/xrt/state_trackers/oxr/oxr_objects.h      |  3 +
+ src/xrt/state_trackers/oxr/oxr_session.c      |  3 +
+ src/xrt/state_trackers/oxr/oxr_system.c       | 26 ++++++++
+ 23 files changed, 276 insertions(+), 2 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8d970babc..88452629f 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -359,8 +359,11 @@ option(XRT_FEATURE_OPENXR_VULKAN_SWAPCHAIN_FORMAT_LIST "Enable XR_KHR_vulkan_swa
+ option(XRT_FEATURE_OPENXR_XDEV_SPACE "Enable XR_MNDX_xdev_space" ON)
+ option(XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META "Enable XR_META_body_tracking_full_body" ON)
+ option(XRT_FEATURE_OPENXR_BODY_TRACKING_FIDELITY_META "Enable XR_META_body_tracking_fidelity" ON)
++option(XRT_FEATURE_OPENXR_BODY_TRACKING_CALIBRATION_META "Enable XR_META_body_tracking_calibration" ON)
+ 
+-if(XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META OR XRT_FEATURE_OPENXR_BODY_TRACKING_FIDELITY_META)
++if(XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META OR 
++	XRT_FEATURE_OPENXR_BODY_TRACKING_FIDELITY_META OR
++	XRT_FEATURE_OPENXR_BODY_TRACKING_CALIBRATION_META)
+ 	set(XRT_FEATURE_OPENXR_BODY_TRACKING_FB ON)
+ endif()
+ 
+@@ -588,6 +591,7 @@ message(STATUS "#    FEATURE_DEBUG_GUI:                             ${XRT_FEATUR
+ message(STATUS "#    FEATURE_OPENXR:                                ${XRT_FEATURE_OPENXR}")
+ message(STATUS "#    FEATURE_OPENXR_ACTIVE_ACTION_SET_PRIORITY:     ${XRT_FEATURE_OPENXR_ACTIVE_ACTION_SET_PRIORITY}")
+ message(STATUS "#    FEATURE_OPENXR_BODY_TRACKING_FB:               ${XRT_FEATURE_OPENXR_BODY_TRACKING_FB}")
++message(STATUS "#    FEATURE_OPENXR_BODY_TRACKING_CALIBRATION_META: ${XRT_FEATURE_OPENXR_BODY_TRACKING_CALIBRATION_META}")
+ message(STATUS "#    FEATURE_OPENXR_BODY_TRACKING_FIDELITY_META:    ${XRT_FEATURE_OPENXR_BODY_TRACKING_FIDELITY_META}")
+ message(STATUS "#    FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META:   ${XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META}")
+ message(STATUS "#    FEATURE_OPENXR_FACE_TRACKING2_FB:              ${XRT_FEATURE_OPENXR_FACE_TRACKING2_FB}")
+diff --git a/scripts/generate_oxr_ext_support.py b/scripts/generate_oxr_ext_support.py
+index 85e50c833..59a06a796 100755
+--- a/scripts/generate_oxr_ext_support.py
++++ b/scripts/generate_oxr_ext_support.py
+@@ -80,6 +80,7 @@ EXTENSIONS = (
+     ['XR_FB_touch_controller_pro', 'XRT_FEATURE_OPENXR_INTERACTION_TOUCH_PRO'],
+     ['XR_FB_touch_controller_proximity', 'XRT_FEATURE_OPENXR_INTERACTION_FB_PROXIMITY'],
+     ['XR_HTC_facial_tracking', 'XRT_FEATURE_OPENXR_FACIAL_TRACKING_HTC'],
++    ['XR_META_body_tracking_calibration', 'XRT_FEATURE_OPENXR_BODY_TRACKING_CALIBRATION_META'],
+     ['XR_META_body_tracking_fidelity', 'XRT_FEATURE_OPENXR_BODY_TRACKING_FIDELITY_META'],
+     ['XR_META_body_tracking_full_body', 'XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META'],
+     ['XR_META_touch_controller_plus', 'XRT_FEATURE_OPENXR_INTERACTION_TOUCH_PLUS'],
+diff --git a/scripts/mapping.imp b/scripts/mapping.imp
+index fa4f37cc1..d46a75cdf 100644
+--- a/scripts/mapping.imp
++++ b/scripts/mapping.imp
+@@ -33,6 +33,7 @@
+ { symbol: ["XRT_FEATURE_DEBUG_GUI", "public", "\"xrt/xrt_config_build.h\"", "public"] },
+ { symbol: ["XRT_FEATURE_OPENXR", "public", "\"xrt/xrt_config_build.h\"", "public"] },
+ { symbol: ["XRT_FEATURE_OPENXR_ACTIVE_ACTION_SET_PRIORITY", "public", "\"xrt/xrt_config_build.h\"", "public"] },
++{ symbol: ["XRT_FEATURE_OPENXR_BODY_TRACKING_CALIBRATION_META", "public", "\"xrt/xrt_config_build.h\"", "public"] },
+ { symbol: ["XRT_FEATURE_OPENXR_BODY_TRACKING_FB", "public", "\"xrt/xrt_config_build.h\"", "public"] },
+ { symbol: ["XRT_FEATURE_OPENXR_BODY_TRACKING_FIDELITY_META", "public", "\"xrt/xrt_config_build.h\"", "public"] },
+ { symbol: ["XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META", "public", "\"xrt/xrt_config_build.h\"", "public"] },
+diff --git a/src/xrt/compositor/multi/comp_multi_system.c b/src/xrt/compositor/multi/comp_multi_system.c
+index 923acaeb3..3fff61031 100644
+--- a/src/xrt/compositor/multi/comp_multi_system.c
++++ b/src/xrt/compositor/multi/comp_multi_system.c
+@@ -432,6 +432,7 @@ update_session_state_locked(struct multi_system_compositor *msc)
+ 	    .fb_face_tracking2_enabled = false,
+ 	    .meta_body_tracking_full_body_enabled = false,
+ 	    .meta_body_tracking_fidelity_enabled = false,
++	    .meta_body_tracking_calibration_enabled = false,
+ 	};
+ 
+ 	switch (msc->sessions.state) {
+diff --git a/src/xrt/include/CMakeLists.txt b/src/xrt/include/CMakeLists.txt
+index 03abbf401..1678de1de 100644
+--- a/src/xrt/include/CMakeLists.txt
++++ b/src/xrt/include/CMakeLists.txt
+@@ -10,6 +10,7 @@ target_include_directories(
+ 
+ if(XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META
+    OR XRT_FEATURE_OPENXR_BODY_TRACKING_FIDELITY_META
++   OR XRT_FEATURE_OPENXR_BODY_TRACKING_CALIBRATION_META
+ 	)
+ 	set(OCULUS_MOBILE_OPENXR_SDK_URL
+ 	    "https://securecdn.oculus.com/binaries/download/?id=7577210995650755"
+diff --git a/src/xrt/include/xrt/xrt_compositor.h b/src/xrt/include/xrt/xrt_compositor.h
+index 9ee94ef00..d3ffdef66 100644
+--- a/src/xrt/include/xrt/xrt_compositor.h
++++ b/src/xrt/include/xrt/xrt_compositor.h
+@@ -965,6 +965,7 @@ struct xrt_begin_session_info
+ 	bool fb_face_tracking2_enabled;
+ 	bool meta_body_tracking_full_body_enabled;
+ 	bool meta_body_tracking_fidelity_enabled;
++	bool meta_body_tracking_calibration_enabled;
+ };
+ 
+ /*!
+diff --git a/src/xrt/include/xrt/xrt_config_build.h.cmake_in b/src/xrt/include/xrt/xrt_config_build.h.cmake_in
+index 5884145ba..398d154f9 100644
+--- a/src/xrt/include/xrt/xrt_config_build.h.cmake_in
++++ b/src/xrt/include/xrt/xrt_config_build.h.cmake_in
+@@ -30,6 +30,7 @@
+ #cmakedefine XRT_FEATURE_DEBUG_GUI
+ #cmakedefine XRT_FEATURE_OPENXR
+ #cmakedefine XRT_FEATURE_OPENXR_ACTIVE_ACTION_SET_PRIORITY
++#cmakedefine XRT_FEATURE_OPENXR_BODY_TRACKING_CALIBRATION_META
+ #cmakedefine XRT_FEATURE_OPENXR_BODY_TRACKING_FB
+ #cmakedefine XRT_FEATURE_OPENXR_BODY_TRACKING_FIDELITY_META
+ #cmakedefine XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META
+diff --git a/src/xrt/include/xrt/xrt_defines.h b/src/xrt/include/xrt/xrt_defines.h
+index 0569911cd..d195720e0 100644
+--- a/src/xrt/include/xrt/xrt_defines.h
++++ b/src/xrt/include/xrt/xrt_defines.h
+@@ -1839,6 +1839,17 @@ enum xrt_body_tracking_fidelity_meta
+ 	XRT_BODY_TRACKING_FIDELITY_HIGH_META = 2,
+ };
+ 
++// XR_META_body_tracking_calibration
++enum xrt_body_tracking_calibration_state_meta
++{
++	// Valid calibration, pose is safe to use
++	XRT_BODY_TRACKING_CALIBRATION_STATE_VALID_META = 1,
++	// Calibration is still running, pose may be incorrect
++	XRT_BODY_TRACKING_CALIBRATION_STATE_CALIBRATING_META = 2,
++	// Calibration is invalid, pose is not safe to use
++	XRT_BODY_TRACKING_CALIBRATION_STATE_INVALID_META = 3,
++};
++
+ // XR_FB_body_tracking
+ struct xrt_body_skeleton_joint_fb
+ {
+@@ -1885,6 +1896,8 @@ struct xrt_base_body_joint_set_meta
+ 
+ 	struct
+ 	{
++		// Requires XR_META_body_tracking_calibration, @ref xrt_device::body_tracking_calibration_supported
++		enum xrt_body_tracking_calibration_state_meta calibration_status;
+ 		// Requires XR_META_body_tracking_fidelity, @ref xrt_device::body_tracking_fidelity_supported
+ 		enum xrt_body_tracking_fidelity_meta fidelity_status;
+ 	} exts;
+diff --git a/src/xrt/include/xrt/xrt_device.h b/src/xrt/include/xrt/xrt_device.h
+index a6bf2ec71..c32878ec9 100644
+--- a/src/xrt/include/xrt/xrt_device.h
++++ b/src/xrt/include/xrt/xrt_device.h
+@@ -281,6 +281,7 @@ struct xrt_device
+ 	bool face_tracking_supported;
+ 	bool body_tracking_supported;
+ 	bool body_tracking_fidelity_supported;
++	bool body_tracking_calibration_supported;
+ 	bool battery_status_supported;
+ 
+ 	/*
+@@ -403,7 +404,23 @@ struct xrt_device
+ 	                                struct xrt_body_joint_set *out_value);
+ 
+ 	/*!
+-	 * @brief XR_META_body_tracking_fidelity - body tracking extension for request changing the tracking fidelity
++	 * @brief XR_META_body_tracking_calibration - body tracking extension to reset the body tracking calibration
++	 *
++	 * @param[in] xdev              The body tracking device.
++	 */
++	xrt_result_t (*reset_body_tracking_calibration_meta)(struct xrt_device *xdev);
++
++	/*!
++	 * @brief XR_META_body_tracking_calibration - body tracking extension to suggest a body tracking calibration
++	 * override
++	 *
++	 * @param[in] xdev              The body tracking device.
++	 * @param[in] new_body_height   The suggested new body height to override.
++	 */
++	xrt_result_t (*set_body_tracking_calibration_override_meta)(struct xrt_device *xdev, float new_body_height);
++
++	/*!
++	 * @brief XR_META_body_tracking_calibration - body tracking extension for request changing the tracking fidelity
+ 	 *
+ 	 * @param[in] xdev              The body tracking device.
+ 	 * @param[in] new_fidelity      The new tracking fidelity mode.
+@@ -675,6 +692,38 @@ xrt_device_set_body_tracking_fidelity_meta(struct xrt_device *xdev, enum xrt_bod
+ 	return xdev->set_body_tracking_fidelity_meta(xdev, new_fidelity);
+ }
+ 
++/*!
++ * Helper function for @ref xrt_device::reset_body_tracking_calibration_meta.
++ *
++ * @copydoc xrt_device::reset_body_tracking_calibration_meta
++ *
++ * @public @memberof xrt_device
++ */
++static inline xrt_result_t
++xrt_device_reset_body_tracking_calibration_meta(struct xrt_device *xdev)
++{
++	if (xdev->reset_body_tracking_calibration_meta == NULL) {
++		return XRT_ERROR_NOT_IMPLEMENTED;
++	}
++	return xdev->reset_body_tracking_calibration_meta(xdev);
++}
++
++/*!
++ * Helper function for @ref xrt_device::set_body_tracking_calibration_override_meta.
++ *
++ * @copydoc xrt_device::set_body_tracking_calibration_override_meta
++ *
++ * @public @memberof xrt_device
++ */
++static inline xrt_result_t
++xrt_device_set_body_tracking_calibration_override_meta(struct xrt_device *xdev, float new_body_height)
++{
++	if (xdev->set_body_tracking_calibration_override_meta == NULL) {
++		return XRT_ERROR_NOT_IMPLEMENTED;
++	}
++	return xdev->set_body_tracking_calibration_override_meta(xdev, new_body_height);
++}
++
+ /*!
+  * Helper function for @ref xrt_device::set_output.
+  *
+diff --git a/src/xrt/include/xrt/xrt_instance.h b/src/xrt/include/xrt/xrt_instance.h
+index 6c4e45d09..161d5d767 100644
+--- a/src/xrt/include/xrt/xrt_instance.h
++++ b/src/xrt/include/xrt/xrt_instance.h
+@@ -79,6 +79,7 @@ struct xrt_application_info
+ 	bool fb_face_tracking2_enabled;
+ 	bool meta_body_tracking_full_body_enabled;
+ 	bool meta_body_tracking_fidelity_enabled;
++	bool meta_body_tracking_calibration_enabled;
+ };
+ 
+ /*!
+diff --git a/src/xrt/include/xrt/xrt_openxr_includes.h b/src/xrt/include/xrt/xrt_openxr_includes.h
+index 40376d193..ec398b74c 100644
+--- a/src/xrt/include/xrt/xrt_openxr_includes.h
++++ b/src/xrt/include/xrt/xrt_openxr_includes.h
+@@ -71,4 +71,5 @@ typedef __eglMustCastToProperFunctionPointerType (*PFNEGLGETPROCADDRESSPROC)(con
+ #if defined(XRT_USE_META_EXT_HEADERS)
+ #include "meta_openxr_preview/meta_body_tracking_full_body.h"
+ #include "meta_openxr_preview/meta_body_tracking_fidelity.h"
++#include "meta_openxr_preview/meta_body_tracking_calibration.h"
+ #endif
+diff --git a/src/xrt/ipc/client/ipc_client_device.c b/src/xrt/ipc/client/ipc_client_device.c
+index bdfbe101d..d17383259 100644
+--- a/src/xrt/ipc/client/ipc_client_device.c
++++ b/src/xrt/ipc/client/ipc_client_device.c
+@@ -167,6 +167,28 @@ ipc_client_device_get_body_joints(struct xrt_device *xdev,
+ 	IPC_CHK_ALWAYS_RET(icd->ipc_c, xret, "ipc_call_device_get_body_joints");
+ }
+ 
++static xrt_result_t
++ipc_client_device_reset_body_tracking_calibration_meta(struct xrt_device *xdev)
++{
++	ipc_client_device_t *icd = ipc_client_device(xdev);
++	xrt_result_t xret = ipc_call_device_reset_body_tracking_calibration_meta( //
++	    icd->ipc_c,                                                           //
++	    icd->device_id);                                                      //
++	IPC_CHK_ALWAYS_RET(icd->ipc_c, xret, "ipc_call_device_reset_body_tracking_calibration_meta");
++}
++
++static xrt_result_t
++ipc_client_device_set_body_tracking_calibration_override_meta(struct xrt_device *xdev, float new_body_height)
++{
++	ipc_client_device_t *icd = ipc_client_device(xdev);
++
++	xrt_result_t xret = ipc_call_device_set_body_tracking_calibration_override_meta( //
++	    icd->ipc_c,                                                                  //
++	    icd->device_id,                                                              //
++	    new_body_height);                                                            //
++	IPC_CHK_ALWAYS_RET(icd->ipc_c, xret, "ipc_call_device_set_body_tracking_calibration_override_meta");
++}
++
+ static xrt_result_t
+ ipc_client_device_set_body_tracking_fidelity_meta(struct xrt_device *xdev,
+                                                   enum xrt_body_tracking_fidelity_meta new_fidelity)
+@@ -232,6 +254,9 @@ ipc_client_device_create(struct ipc_connection *ipc_c, struct xrt_tracking_origi
+ 	icd->base.get_face_tracking = ipc_client_device_get_face_tracking;
+ 	icd->base.get_body_skeleton = ipc_client_device_get_body_skeleton;
+ 	icd->base.get_body_joints = ipc_client_device_get_body_joints;
++	icd->base.reset_body_tracking_calibration_meta = ipc_client_device_reset_body_tracking_calibration_meta;
++	icd->base.set_body_tracking_calibration_override_meta =
++	    ipc_client_device_set_body_tracking_calibration_override_meta;
+ 	icd->base.set_body_tracking_fidelity_meta = ipc_client_device_set_body_tracking_fidelity_meta;
+ 	icd->base.get_view_poses = ipc_client_device_get_view_poses;
+ 	icd->base.set_output = ipc_client_device_set_output;
+diff --git a/src/xrt/ipc/server/ipc_server_handler.c b/src/xrt/ipc/server/ipc_server_handler.c
+index 938cf174d..15355c049 100644
+--- a/src/xrt/ipc/server/ipc_server_handler.c
++++ b/src/xrt/ipc/server/ipc_server_handler.c
+@@ -332,6 +332,9 @@ ipc_handle_instance_describe_client(volatile struct ipc_client_state *ics,
+ #ifdef OXR_HAVE_META_body_tracking_fidelity
+ 	EXT(meta_body_tracking_fidelity_enabled);
+ #endif
++#ifdef OXR_HAVE_META_body_tracking_calibration
++	EXT(meta_body_tracking_calibration_enabled);
++#endif
+ #ifdef OXR_HAVE_FB_face_tracking2
+ 	EXT(fb_face_tracking2_enabled);
+ #endif
+@@ -431,6 +434,7 @@ ipc_handle_session_begin(volatile struct ipc_client_state *ics)
+ 	    .fb_face_tracking2_enabled = ics->client_state.info.fb_face_tracking2_enabled,
+ 	    .meta_body_tracking_full_body_enabled = ics->client_state.info.meta_body_tracking_full_body_enabled,
+ 	    .meta_body_tracking_fidelity_enabled = ics->client_state.info.meta_body_tracking_fidelity_enabled,
++	    .meta_body_tracking_calibration_enabled = ics->client_state.info.meta_body_tracking_calibration_enabled,
+ 	};
+ 
+ 	return xrt_comp_begin_session(ics->xc, &begin_session_info);
+@@ -2263,6 +2267,22 @@ ipc_handle_device_get_body_joints(volatile struct ipc_client_state *ics,
+ 	return xrt_device_get_body_joints(xdev, body_tracking_type, desired_timestamp_ns, out_value);
+ }
+ 
++xrt_result_t
++ipc_handle_device_reset_body_tracking_calibration_meta(volatile struct ipc_client_state *ics, uint32_t id)
++{
++	struct xrt_device *xdev = get_xdev(ics, id);
++	return xrt_device_reset_body_tracking_calibration_meta(xdev);
++}
++
++xrt_result_t
++ipc_handle_device_set_body_tracking_calibration_override_meta(volatile struct ipc_client_state *ics,
++                                                              uint32_t id,
++                                                              float new_body_height)
++{
++	struct xrt_device *xdev = get_xdev(ics, id);
++	return xrt_device_set_body_tracking_calibration_override_meta(xdev, new_body_height);
++}
++
+ xrt_result_t
+ ipc_handle_device_set_body_tracking_fidelity_meta(volatile struct ipc_client_state *ics,
+                                                   uint32_t id,
+diff --git a/src/xrt/ipc/shared/proto.json b/src/xrt/ipc/shared/proto.json
+index 91edd03b7..eb2636cd6 100644
+--- a/src/xrt/ipc/shared/proto.json
++++ b/src/xrt/ipc/shared/proto.json
+@@ -534,6 +534,19 @@
+ 		]
+ 	},
+ 
++	"device_reset_body_tracking_calibration_meta": {
++		"in": [
++			{"name": "id", "type": "uint32_t"}
++		]
++	},
++
++	"device_set_body_tracking_calibration_override_meta": {
++		"in": [
++			{"name": "id", "type": "uint32_t"},
++			{"name": "new_body_height", "type": "float"}
++		]
++	},
++
+ 	"device_get_battery_status": {
+ 		"in": [
+ 			{"name": "id", "type": "uint32_t"}
+diff --git a/src/xrt/state_trackers/oxr/oxr_api_body_tracking.c b/src/xrt/state_trackers/oxr/oxr_api_body_tracking.c
+index bd03a3ccb..109b8cb89 100644
+--- a/src/xrt/state_trackers/oxr/oxr_api_body_tracking.c
++++ b/src/xrt/state_trackers/oxr/oxr_api_body_tracking.c
+@@ -98,6 +98,13 @@ oxr_xrLocateBodyJointsFB(XrBodyTrackerFB bodyTracker,
+ 	if (fidelity_status != NULL) {
+ 		OXR_VERIFY_EXTENSION(&log, body_tracker_fb->sess->sys->inst, META_body_tracking_fidelity);
+ 	}
++#endif
++#ifdef OXR_HAVE_META_body_tracking_calibration
++	XrBodyTrackingCalibrationStatusMETA *calibration_status = OXR_GET_OUTPUT_FROM_CHAIN(
++	    locations, XR_TYPE_BODY_TRACKING_CALIBRATION_STATUS_META, XrBodyTrackingCalibrationStatusMETA);
++	if (calibration_status != NULL) {
++		OXR_VERIFY_EXTENSION(&log, body_tracker_fb->sess->sys->inst, META_body_tracking_calibration);
++	}
+ #endif
+ 	return oxr_locate_body_joints_fb(&log, body_tracker_fb, base_spc, locateInfo, locations);
+ }
+@@ -129,3 +136,60 @@ oxr_xrRequestBodyTrackingFidelityMETA(XrBodyTrackerFB bodyTracker, const XrBodyT
+ 	return XR_SUCCESS;
+ }
+ #endif
++
++#ifdef OXR_HAVE_META_body_tracking_calibration
++XRAPI_ATTR XrResult XRAPI_CALL
++oxr_xrResetBodyTrackingCalibrationMETA(XrBodyTrackerFB bodyTracker)
++{
++	OXR_TRACE_MARKER();
++
++	struct oxr_logger log;
++	struct oxr_body_tracker_fb *body_tracker_fb = NULL;
++	OXR_VERIFY_BODY_TRACKER_FB_AND_INIT_LOG(&log, bodyTracker, body_tracker_fb,
++	                                        "xrResetBodyTrackingCalibrationMETA");
++	OXR_VERIFY_SESSION_NOT_LOST(&log, body_tracker_fb->sess);
++	OXR_VERIFY_ARG_NOT_NULL(&log, body_tracker_fb->xdev);
++	OXR_VERIFY_EXTENSION(&log, body_tracker_fb->sess->sys->inst, META_body_tracking_calibration);
++
++	if (!body_tracker_fb->xdev->body_tracking_calibration_supported) {
++		return oxr_error(&log, XR_ERROR_FEATURE_UNSUPPORTED,
++		                 "Body tracking device does not support this operation");
++	}
++
++	const xrt_result_t result = xrt_device_reset_body_tracking_calibration_meta(body_tracker_fb->xdev);
++	if (result != XRT_SUCCESS) {
++		return oxr_error(&log, XR_ERROR_RUNTIME_FAILURE,
++		                 "resetting body tracking calibration failed");
++	}
++	return XR_SUCCESS;
++}
++
++XRAPI_ATTR XrResult XRAPI_CALL
++oxr_xrSuggestBodyTrackingCalibrationOverrideMETA(XrBodyTrackerFB bodyTracker,
++                                                 const XrBodyTrackingCalibrationInfoMETA *calibrationInfo)
++{
++	OXR_TRACE_MARKER();
++
++	struct oxr_logger log;
++	struct oxr_body_tracker_fb *body_tracker_fb = NULL;
++	OXR_VERIFY_BODY_TRACKER_FB_AND_INIT_LOG(&log, bodyTracker, body_tracker_fb,
++	                                        "xrSuggestBodyTrackingCalibrationOverrideMETA");
++	OXR_VERIFY_SESSION_NOT_LOST(&log, body_tracker_fb->sess);
++	OXR_VERIFY_ARG_NOT_NULL(&log, body_tracker_fb->xdev);
++	OXR_VERIFY_EXTENSION(&log, body_tracker_fb->sess->sys->inst, META_body_tracking_calibration);
++	OXR_VERIFY_ARG_TYPE_AND_NOT_NULL(&log, calibrationInfo, XR_TYPE_BODY_TRACKING_CALIBRATION_INFO_META);
++
++	if (!body_tracker_fb->xdev->body_tracking_calibration_supported) {
++		return oxr_error(&log, XR_ERROR_FEATURE_UNSUPPORTED,
++		                 "Body tracking device does not support this operation");
++	}
++
++	const xrt_result_t result =  xrt_device_set_body_tracking_calibration_override_meta(body_tracker_fb->xdev,
++	                                                                                    calibrationInfo->bodyHeight);
++	if (result != XRT_SUCCESS) {
++		return oxr_error(&log, XR_ERROR_RUNTIME_FAILURE,
++		                 "overriding body tracking calibration failed");
++	}
++	return XR_SUCCESS;
++}
++#endif
+diff --git a/src/xrt/state_trackers/oxr/oxr_api_funcs.h b/src/xrt/state_trackers/oxr/oxr_api_funcs.h
+index 82f3675c5..1ddf337e9 100644
+--- a/src/xrt/state_trackers/oxr/oxr_api_funcs.h
++++ b/src/xrt/state_trackers/oxr/oxr_api_funcs.h
+@@ -719,6 +719,17 @@ XRAPI_ATTR XrResult XRAPI_CALL
+ oxr_xrRequestBodyTrackingFidelityMETA(XrBodyTrackerFB bodyTracker, const XrBodyTrackingFidelityMETA fidelity);
+ #endif
+ 
++#ifdef OXR_HAVE_META_body_tracking_calibration
++//! OpenXR API function @ep{xrResetBodyTrackingCalibrationMETA}
++XRAPI_ATTR XrResult XRAPI_CALL
++oxr_xrResetBodyTrackingCalibrationMETA(XrBodyTrackerFB bodyTracker);
++
++//! OpenXR API function @ep{xrSuggestBodyTrackingCalibrationOverrideMETA}
++XRAPI_ATTR XrResult XRAPI_CALL
++oxr_xrSuggestBodyTrackingCalibrationOverrideMETA(XrBodyTrackerFB bodyTracker,
++                                                 const XrBodyTrackingCalibrationInfoMETA *calibrationInfo);
++#endif
++
+ /*!
+  * @}
+  */
+diff --git a/src/xrt/state_trackers/oxr/oxr_api_negotiate.c b/src/xrt/state_trackers/oxr/oxr_api_negotiate.c
+index 7285ec5b1..4830c71e5 100644
+--- a/src/xrt/state_trackers/oxr/oxr_api_negotiate.c
++++ b/src/xrt/state_trackers/oxr/oxr_api_negotiate.c
+@@ -351,6 +351,11 @@ handle_non_null(struct oxr_instance *inst, struct oxr_logger *log, const char *n
+ 	ENTRY_IF_EXT(xrRequestBodyTrackingFidelityMETA, META_body_tracking_fidelity);
+ #endif
+ 
++#ifdef OXR_HAVE_META_body_tracking_calibration
++	ENTRY_IF_EXT(xrResetBodyTrackingCalibrationMETA, META_body_tracking_calibration);
++	ENTRY_IF_EXT(xrSuggestBodyTrackingCalibrationOverrideMETA, META_body_tracking_calibration);
++#endif
++
+ #ifdef OXR_HAVE_KHR_locate_spaces
+ 	ENTRY_IF_EXT(xrLocateSpacesKHR, KHR_locate_spaces);
+ #endif
+diff --git a/src/xrt/state_trackers/oxr/oxr_body_tracking.c b/src/xrt/state_trackers/oxr/oxr_body_tracking.c
+index 7abf82bc1..2adfe29ec 100644
+--- a/src/xrt/state_trackers/oxr/oxr_body_tracking.c
++++ b/src/xrt/state_trackers/oxr/oxr_body_tracking.c
+@@ -219,5 +219,19 @@ oxr_locate_body_joints_fb(struct oxr_logger *log,
+ 		fidelity_status->fidelity = (XrBodyTrackingFidelityMETA)body_joint_set_fb->exts.fidelity_status;
+ 	}
+ #endif
++
++#ifdef OXR_HAVE_META_body_tracking_calibration
++	XrBodyTrackingCalibrationStatusMETA *calibration_status = OXR_GET_OUTPUT_FROM_CHAIN(
++	    locations, XR_TYPE_BODY_TRACKING_CALIBRATION_STATUS_META, XrBodyTrackingCalibrationStatusMETA);
++	if (calibration_status != NULL) {
++		if (!body_tracker_fb->xdev->body_tracking_calibration_supported) {
++			return oxr_error(log, XR_ERROR_FEATURE_UNSUPPORTED,
++			                 "body tracking device does not support XR_META_body_tracking_calibration");
++		}
++		calibration_status->status =
++		    (XrBodyTrackingCalibrationStateMETA)body_joint_set_fb->exts.calibration_status;
++	}
++#endif
++
+ 	return XR_SUCCESS;
+ }
+diff --git a/src/xrt/state_trackers/oxr/oxr_extension_support.h b/src/xrt/state_trackers/oxr/oxr_extension_support.h
+index 0304c2809..40f4d677f 100644
+--- a/src/xrt/state_trackers/oxr/oxr_extension_support.h
++++ b/src/xrt/state_trackers/oxr/oxr_extension_support.h
+@@ -748,6 +748,18 @@
+ #endif
+ 
+ 
++/*
++ * XR_META_body_tracking_calibration
++ */
++#if defined(XR_META_body_tracking_calibration) && defined(XRT_FEATURE_OPENXR_BODY_TRACKING_CALIBRATION_META)
++#define OXR_HAVE_META_body_tracking_calibration
++#define OXR_EXTENSION_SUPPORT_META_body_tracking_calibration(_)                                                        \
++	_(META_body_tracking_calibration, META_BODY_TRACKING_CALIBRATION)
++#else
++#define OXR_EXTENSION_SUPPORT_META_body_tracking_calibration(_)
++#endif
++
++
+ /*
+  * XR_META_body_tracking_fidelity
+  */
+@@ -841,6 +853,7 @@
+     OXR_EXTENSION_SUPPORT_FB_touch_controller_pro(_) \
+     OXR_EXTENSION_SUPPORT_FB_touch_controller_proximity(_) \
+     OXR_EXTENSION_SUPPORT_HTC_facial_tracking(_) \
++    OXR_EXTENSION_SUPPORT_META_body_tracking_calibration(_) \
+     OXR_EXTENSION_SUPPORT_META_body_tracking_fidelity(_) \
+     OXR_EXTENSION_SUPPORT_META_body_tracking_full_body(_) \
+     OXR_EXTENSION_SUPPORT_META_touch_controller_plus(_) \
+diff --git a/src/xrt/state_trackers/oxr/oxr_instance.c b/src/xrt/state_trackers/oxr/oxr_instance.c
+index 66f342f80..1831ff061 100644
+--- a/src/xrt/state_trackers/oxr/oxr_instance.c
++++ b/src/xrt/state_trackers/oxr/oxr_instance.c
+@@ -313,6 +313,9 @@ oxr_instance_create(struct oxr_logger *log,
+ #endif
+ #ifdef OXR_HAVE_META_body_tracking_fidelity
+ 	    .meta_body_tracking_fidelity_enabled = extensions->META_body_tracking_fidelity,
++#endif
++#ifdef OXR_HAVE_META_body_tracking_calibration
++	    .meta_body_tracking_calibration_enabled = extensions->META_body_tracking_calibration,
+ #endif
+ 	};
+ 	snprintf(i_info.app_info.application_name, sizeof(i_info.app_info.application_name), "%s",
+diff --git a/src/xrt/state_trackers/oxr/oxr_objects.h b/src/xrt/state_trackers/oxr/oxr_objects.h
+index 80938b9b5..8c7d02e86 100644
+--- a/src/xrt/state_trackers/oxr/oxr_objects.h
++++ b/src/xrt/state_trackers/oxr/oxr_objects.h
+@@ -1068,6 +1068,9 @@ oxr_system_get_full_body_tracking_meta_support(struct oxr_logger *log, struct ox
+ bool
+ oxr_system_get_body_tracking_fidelity_meta_support(struct oxr_logger *log, struct oxr_instance *inst);
+ 
++bool
++oxr_system_get_body_tracking_calibration_meta_support(struct oxr_logger *log, struct oxr_instance *inst);
++
+ /*
+  *
+  * oxr_event.cpp
+diff --git a/src/xrt/state_trackers/oxr/oxr_session.c b/src/xrt/state_trackers/oxr/oxr_session.c
+index 4ec38f07e..e5b4e0ddd 100644
+--- a/src/xrt/state_trackers/oxr/oxr_session.c
++++ b/src/xrt/state_trackers/oxr/oxr_session.c
+@@ -255,6 +255,9 @@ oxr_session_begin(struct oxr_logger *log, struct oxr_session *sess, const XrSess
+ #endif
+ #ifdef OXR_HAVE_META_body_tracking_fidelity
+ 		    .meta_body_tracking_fidelity_enabled = extensions->META_body_tracking_fidelity,
++#endif
++#ifdef OXR_HAVE_META_body_tracking_calibration
++		    .meta_body_tracking_calibration_enabled = extensions->META_body_tracking_calibration,
+ #endif
+ 		};
+ 
+diff --git a/src/xrt/state_trackers/oxr/oxr_system.c b/src/xrt/state_trackers/oxr/oxr_system.c
+index 76ba3190c..91f2dcf4d 100644
+--- a/src/xrt/state_trackers/oxr/oxr_system.c
++++ b/src/xrt/state_trackers/oxr/oxr_system.c
+@@ -390,6 +390,18 @@ oxr_system_get_body_tracking_fidelity_meta_support(struct oxr_logger *log, struc
+ 	return body->body_tracking_fidelity_supported;
+ }
+ 
++bool
++oxr_system_get_body_tracking_calibration_meta_support(struct oxr_logger *log, struct oxr_instance *inst)
++{
++	if (!oxr_system_get_body_tracking_fb_support(log, inst) &&
++	    !oxr_system_get_full_body_tracking_meta_support(log, inst)) {
++		return false;
++	}
++	struct oxr_system *sys = &inst->system;
++	const struct xrt_device *body = GET_XDEV_BY_ROLE(sys, body);
++	return body->body_tracking_calibration_supported;
++}
++
+ XrResult
+ oxr_system_get_properties(struct oxr_logger *log, struct oxr_system *sys, XrSystemProperties *properties)
+ {
+@@ -554,6 +566,20 @@ oxr_system_get_properties(struct oxr_logger *log, struct oxr_system *sys, XrSyst
+ 	}
+ #endif // OXR_HAVE_META_body_tracking_fidelity
+ 
++#ifdef OXR_HAVE_META_body_tracking_calibration
++	XrSystemPropertiesBodyTrackingCalibrationMETA *body_tracking_calibration_meta_props = NULL;
++	if (sys->inst->extensions.META_body_tracking_calibration) {
++		body_tracking_calibration_meta_props =
++		    OXR_GET_OUTPUT_FROM_CHAIN(properties, XR_TYPE_SYSTEM_PROPERTIES_BODY_TRACKING_CALIBRATION_META,
++		                              XrSystemPropertiesBodyTrackingCalibrationMETA);
++	}
++
++	if (body_tracking_calibration_meta_props) {
++		body_tracking_calibration_meta_props->supportsHeightOverride =
++		    oxr_system_get_body_tracking_calibration_meta_support(log, sys->inst);
++	}
++#endif // OXR_HAVE_META_body_tracking_calibration
++
+ 	return XR_SUCCESS;
+ }
+ 
+-- 
+2.47.1
+

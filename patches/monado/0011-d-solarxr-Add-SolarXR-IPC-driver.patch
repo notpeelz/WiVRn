@@ -1,0 +1,1594 @@
+From bd6661be8b8b74311daf33faee008dfe64286b94 Mon Sep 17 00:00:00 2001
+From: rcelyte <rcelyte@battletrains.org>
+Date: Mon, 17 Jun 2024 04:32:36 +0000
+Subject: [PATCH 11/14] d/solarxr: Add SolarXR IPC driver
+
+---
+ CMakeLists.txt                            |   3 +
+ src/external/CMakeLists.txt               |   5 +
+ src/external/solarxr/CMakeLists.txt       |  42 +
+ src/external/solarxr/solarxr_protocol.fbs | 206 +++++
+ src/xrt/drivers/CMakeLists.txt            |   9 +
+ src/xrt/drivers/solarxr/ipc_socket.c      | 200 +++++
+ src/xrt/drivers/solarxr/ipc_socket.h      |  28 +
+ src/xrt/drivers/solarxr/solarxr_device.c  | 946 ++++++++++++++++++++++
+ src/xrt/drivers/solarxr/solarxr_device.h  |  33 +
+ src/xrt/targets/common/CMakeLists.txt     |   4 +
+ 10 files changed, 1476 insertions(+)
+ create mode 100644 src/external/solarxr/CMakeLists.txt
+ create mode 100644 src/external/solarxr/solarxr_protocol.fbs
+ create mode 100644 src/xrt/drivers/solarxr/ipc_socket.c
+ create mode 100644 src/xrt/drivers/solarxr/ipc_socket.h
+ create mode 100644 src/xrt/drivers/solarxr/solarxr_device.c
+ create mode 100644 src/xrt/drivers/solarxr/solarxr_device.h
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 88452629f..8e22327e6 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -333,6 +333,7 @@ option_with_deps(XRT_BUILD_DRIVER_VIVE "Enable driver for HTC Vive, Vive Pro, Va
+ option_with_deps(XRT_BUILD_DRIVER_WMR "Enable Windows Mixed Reality driver" DEPENDS "NOT WIN32")
+ option_with_deps(XRT_BUILD_DRIVER_XREAL_AIR "Enable Xreal Air HMD driver" DEPENDS XRT_HAVE_HIDAPI)
+ option_with_deps(XRT_BUILD_DRIVER_SIMULAVR "Enable simula driver" DEPENDS XRT_HAVE_REALSENSE)
++option_with_deps(XRT_BUILD_DRIVER_SOLARXR "Enable SolarXR driver" DEPENDS XRT_HAVE_LINUX)
+ option(XRT_BUILD_DRIVER_SIMULATED "Enable simulated driver" ON)
+ 
+ option(XRT_BUILD_SAMPLES "Enable compiling sample code implementations that will not be linked into any final targets" ON)
+@@ -439,6 +440,7 @@ list(
+ 	"TWRAP"
+ 	"XREAL_AIR"
+ 	"STEAMVR_LIGHTHOUSE"
++	"SOLARXR"
+ 	)
+ 
+ # Package name needs to be known by the native code itself.
+@@ -667,6 +669,7 @@ message(STATUS "#    DRIVER_VIVE:                 ${XRT_BUILD_DRIVER_VIVE}")
+ message(STATUS "#    DRIVER_WMR:                  ${XRT_BUILD_DRIVER_WMR}")
+ message(STATUS "#    DRIVER_XREAL_AIR:            ${XRT_BUILD_DRIVER_XREAL_AIR}")
+ message(STATUS "#    DRIVER_STEAMVR_LIGHTHOUSE:   ${XRT_BUILD_DRIVER_STEAMVR_LIGHTHOUSE}")
++message(STATUS "#    DRIVER_SOLARXR:              ${XRT_BUILD_DRIVER_SOLARXR}")
+ message(STATUS "#####----- Config -----#####")
+ # cmake-format: on
+ 
+diff --git a/src/external/CMakeLists.txt b/src/external/CMakeLists.txt
+index 51f89714f..4498e4d24 100644
+--- a/src/external/CMakeLists.txt
++++ b/src/external/CMakeLists.txt
+@@ -234,3 +234,8 @@ if(XRT_HAVE_VULKAN)
+ 	)
+ 	add_subdirectory(nvpro_pyramid)
+ endif()
++
++# SolarXR codegen
++if(XRT_BUILD_DRIVER_SOLARXR)
++	add_subdirectory(solarxr)
++endif()
+diff --git a/src/external/solarxr/CMakeLists.txt b/src/external/solarxr/CMakeLists.txt
+new file mode 100644
+index 000000000..da83bdc88
+--- /dev/null
++++ b/src/external/solarxr/CMakeLists.txt
+@@ -0,0 +1,42 @@
++# Copyright 2024, rcelyte
++# SPDX-License-Identifier: BSL-1.0
++
++include(FetchContent)
++
++set(FLATCC_TEST
++    OFF
++    CACHE INTERNAL ""
++	)
++set(FLATCC_DEBUG_CLANG_SANITIZE
++    OFF
++    CACHE INTERNAL ""
++	)
++set(FLATCC_REFLECTION
++    OFF
++    CACHE INTERNAL ""
++	)
++set(FLATCC_ALLOW_WERROR
++    OFF
++    CACHE INTERNAL ""
++	)
++set(CMAKE_POLICY_DEFAULT_CMP0048 NEW)
++FetchContent_Declare(
++	FlatCC
++	DOWNLOAD_EXTRACT_TIMESTAMP true
++	URL_HASH SHA256=2533c2f1061498499f15acc7e0937dcf35bc68e685d237325124ae0d6c600c2b
++	URL https://github.com/dvidelabs/flatcc/archive/refs/tags/v0.6.1.tar.gz
++	)
++FetchContent_MakeAvailable(FlatCC)
++
++add_custom_command(
++	OUTPUT solarxr_protocol.h
++	DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/solarxr_protocol.fbs
++	COMMAND
++		flatcc_cli -a --outfile=solarxr_protocol.h
++		${CMAKE_CURRENT_SOURCE_DIR}/solarxr_protocol.fbs
++	)
++
++add_library(solarxr_protocol STATIC solarxr_protocol.h)
++set_target_properties(solarxr_protocol PROPERTIES LINKER_LANGUAGE C)
++target_include_directories(solarxr_protocol SYSTEM INTERFACE ${CMAKE_CURRENT_BINARY_DIR} ${FlatCC_SOURCE_DIR}/include)
++target_link_libraries(solarxr_protocol INTERFACE flatccrt)
+diff --git a/src/external/solarxr/solarxr_protocol.fbs b/src/external/solarxr/solarxr_protocol.fbs
+new file mode 100644
+index 000000000..4711806af
+--- /dev/null
++++ b/src/external/solarxr/solarxr_protocol.fbs
+@@ -0,0 +1,206 @@
++// Copyright 2022, Ryan Butler
++// SPDX-License-Identifier: MIT OR Apache-2.0
++
++// cut down version of https://github.com/SlimeVR/SolarXR-Protocol/tree/863a38fa2bf5cec6580008068e8630374d185d9b/schema
++
++namespace solarxr_protocol.datatypes;
++struct DeviceId {
++    id: uint8;
++}
++table TrackerId {
++    device_id: solarxr_protocol.datatypes.DeviceId;
++    tracker_num: uint8;
++}
++enum BodyPart: uint8 {
++    NONE = 0,
++    HEAD = 1,
++    NECK = 2,
++    CHEST = 3,
++    WAIST = 4,
++    HIP = 5,
++    LEFT_UPPER_LEG = 6,
++    RIGHT_UPPER_LEG = 7,
++    LEFT_LOWER_LEG = 8,
++    RIGHT_LOWER_LEG = 9,
++    LEFT_FOOT = 10,
++    RIGHT_FOOT = 11,
++    LEFT_LOWER_ARM = 14,
++    RIGHT_LOWER_ARM = 15,
++    LEFT_UPPER_ARM = 16,
++    RIGHT_UPPER_ARM = 17,
++    LEFT_HAND = 18,
++    RIGHT_HAND = 19,
++    LEFT_SHOULDER = 20,
++    RIGHT_SHOULDER = 21,
++    UPPER_CHEST = 22,
++    LEFT_HIP = 23,
++    RIGHT_HIP = 24,
++    LEFT_THUMB_PROXIMAL = 25,
++    LEFT_THUMB_INTERMEDIATE = 26,
++    LEFT_THUMB_DISTAL = 27,
++    LEFT_INDEX_PROXIMAL = 28,
++    LEFT_INDEX_INTERMEDIATE = 29,
++    LEFT_INDEX_DISTAL = 30,
++    LEFT_MIDDLE_PROXIMAL = 31,
++    LEFT_MIDDLE_INTERMEDIATE = 32,
++    LEFT_MIDDLE_DISTAL = 33,
++    LEFT_RING_PROXIMAL = 34,
++    LEFT_RING_INTERMEDIATE = 35,
++    LEFT_RING_DISTAL = 36,
++    LEFT_LITTLE_PROXIMAL = 37,
++    LEFT_LITTLE_INTERMEDIATE = 38,
++    LEFT_LITTLE_DISTAL = 39,
++    RIGHT_THUMB_PROXIMAL = 40,
++    RIGHT_THUMB_INTERMEDIATE = 41,
++    RIGHT_THUMB_DISTAL = 42,
++    RIGHT_INDEX_PROXIMAL = 43,
++    RIGHT_INDEX_INTERMEDIATE = 44,
++    RIGHT_INDEX_DISTAL = 45,
++    RIGHT_MIDDLE_PROXIMAL = 46,
++    RIGHT_MIDDLE_INTERMEDIATE = 47,
++    RIGHT_MIDDLE_DISTAL = 48,
++    RIGHT_RING_PROXIMAL = 49,
++    RIGHT_RING_INTERMEDIATE = 50,
++    RIGHT_RING_DISTAL = 51,
++    RIGHT_LITTLE_PROXIMAL = 52,
++    RIGHT_LITTLE_INTERMEDIATE = 53,
++    RIGHT_LITTLE_DISTAL = 54,
++}
++
++namespace solarxr_protocol.datatypes.hardware_info;
++table HardwareInfo {} // stub
++table HardwareStatus {} // stub
++
++namespace solarxr_protocol.datatypes.math;
++struct Quat {
++    x: float32;
++    y: float32;
++    z: float32;
++    w: float32;
++}
++struct Vec3f {
++    x: float32;
++    y: float32;
++    z: float32;
++}
++
++namespace solarxr_protocol.data_feed.tracker;
++table TrackerData {
++    tracker_id: solarxr_protocol.datatypes.TrackerId;
++    info: TrackerInfo;
++    status: uint8;
++    rotation: solarxr_protocol.datatypes.math.Quat;
++    position: solarxr_protocol.datatypes.math.Vec3f;
++    raw_angular_velocity: solarxr_protocol.datatypes.math.Vec3f;
++    raw_acceleration: solarxr_protocol.datatypes.math.Vec3f;
++    temp: float32;
++    linear_acceleration: solarxr_protocol.datatypes.math.Vec3f;
++}
++table TrackerDataMask {
++    info: bool;
++    status: bool;
++    rotation: bool;
++    position: bool;
++    raw_angular_velocity: bool;
++    raw_acceleration: bool;
++    temp: bool;
++    linear_acceleration: bool;
++    rotation_reference_adjusted: bool;
++    rotation_identity_adjusted: bool;
++    tps: bool;
++}
++table TrackerInfo {
++    imu_type: uint16;
++    body_part: solarxr_protocol.datatypes.BodyPart;
++    poll_rate: float32;
++    mounting_orientation: solarxr_protocol.datatypes.math.Quat;
++    editable: bool;
++    is_computed: bool;
++    is_imu: bool;
++    display_name: string;
++    custom_name: string;
++    allow_drift_compensation: bool;
++    mounting_reset_orientation: solarxr_protocol.datatypes.math.Quat;
++    is_hmd: bool;
++}
++
++namespace solarxr_protocol.data_feed.device_data;
++table DeviceDataMask {
++    tracker_data: solarxr_protocol.data_feed.tracker.TrackerDataMask;
++    device_data: bool;
++}
++table DeviceData {
++    id: solarxr_protocol.datatypes.DeviceId;
++    custom_name: string;
++    hardware_info: solarxr_protocol.datatypes.hardware_info.HardwareInfo;
++    hardware_status: solarxr_protocol.datatypes.hardware_info.HardwareStatus;
++    trackers: [solarxr_protocol.data_feed.tracker.TrackerData];
++}
++
++namespace solarxr_protocol.data_feed;
++table Bone {
++    body_part: solarxr_protocol.datatypes.BodyPart;
++    rotation_g: solarxr_protocol.datatypes.math.Quat;
++    bone_length: float32;
++    head_position_g: solarxr_protocol.datatypes.math.Vec3f;
++}
++
++namespace solarxr_protocol.data_feed;
++union DataFeedMessage {
++    PollDataFeed = 1,
++    DataFeedUpdate = 3,
++}
++table DataFeedMessageHeader {
++    message: DataFeedMessage;
++}
++table PollDataFeed {
++    config: DataFeedConfig;
++}
++table DataFeedUpdate {
++    devices: [solarxr_protocol.data_feed.device_data.DeviceData];
++    synthetic_trackers: [solarxr_protocol.data_feed.tracker.TrackerData];
++    bones: [solarxr_protocol.data_feed.Bone];
++}
++table DataFeedConfig {
++    minimum_time_since_last: uint16 = 0;
++    data_mask: solarxr_protocol.data_feed.device_data.DeviceDataMask;
++    synthetic_trackers_mask: solarxr_protocol.data_feed.tracker.TrackerDataMask;
++    bone_mask: bool;
++}
++
++namespace solarxr_protocol.rpc;
++union RpcMessage {
++    SettingsRequest = 6,
++    SettingsResponse,
++}
++table RpcMessageHeader {
++    tx_id: uint32;
++    message: RpcMessage;
++}
++table SettingsRequest {}
++table SettingsResponse {
++    steam_vr_trackers: SteamVRTrackersSetting;
++}
++table SteamVRTrackersSetting {
++    waist: bool;
++    chest: bool;
++    feet: bool (deprecated);
++    knees: bool (deprecated);
++    elbows: bool (deprecated);
++    hands: bool (deprecated);
++    automaticTrackerToggle: bool;
++    left_foot: bool;
++    right_foot: bool;
++    left_knee: bool;
++    right_knee: bool;
++    left_elbow: bool;
++    right_elbow: bool;
++    left_hand: bool;
++    right_hand: bool;
++}
++
++namespace solarxr_protocol;
++table MessageBundle {
++    data_feed_msgs: [solarxr_protocol.data_feed.DataFeedMessageHeader];
++    rpc_msgs: [solarxr_protocol.rpc.RpcMessageHeader];
++}
+diff --git a/src/xrt/drivers/CMakeLists.txt b/src/xrt/drivers/CMakeLists.txt
+index 0d422f16e..971950f09 100644
+--- a/src/xrt/drivers/CMakeLists.txt
++++ b/src/xrt/drivers/CMakeLists.txt
+@@ -494,6 +494,15 @@ if(XRT_BUILD_DRIVER_STEAMVR_LIGHTHOUSE)
+ 	list(APPEND ENABLED_HEADSET_DRIVERS steamvr_lh)
+ endif()
+ 
++if(XRT_BUILD_DRIVER_SOLARXR)
++	add_library(
++		drv_solarxr STATIC solarxr/solarxr_device.c solarxr/solarxr_device.h
++				   solarxr/ipc_socket.c solarxr/ipc_socket.h
++		)
++	target_link_libraries(drv_solarxr PRIVATE xrt-interfaces aux_util solarxr_protocol)
++	list(APPEND ENABLED_DRIVERS solarxr)
++endif()
++
+ if(XRT_BUILD_SAMPLES)
+ 	# We build the sample driver to make sure it stays valid,
+ 	# but it never gets linked into a final target.
+diff --git a/src/xrt/drivers/solarxr/ipc_socket.c b/src/xrt/drivers/solarxr/ipc_socket.c
+new file mode 100644
+index 000000000..168c76b3c
+--- /dev/null
++++ b/src/xrt/drivers/solarxr/ipc_socket.c
+@@ -0,0 +1,200 @@
++// Copyright 2024, rcelyte
++// SPDX-License-Identifier: BSL-1.0
++
++#include "ipc_socket.h"
++#include "os/os_time.h"
++#include "util/u_file.h"
++#include <endian.h>
++#include <errno.h>
++#include <linux/un.h>
++#include <netinet/in.h>
++#include <poll.h>
++#include <sched.h>
++#include <stdatomic.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++void
++ipc_socket_init(struct ipc_socket *const state, const enum u_logging_level log_level)
++{
++	*state = (struct ipc_socket){
++	    .sockfd = -1,
++	    .log_level = log_level,
++	    .timestamp = (int64_t)os_monotonic_get_ns(),
++	    .buffer = malloc(0x1000),
++	};
++	if (state->buffer != NULL) {
++		state->buffer_cap = 0x1000;
++	}
++}
++
++void
++ipc_socket_destroy(struct ipc_socket *const state)
++{
++	const int sockfd = atomic_exchange(&state->sockfd, -1);
++	if (sockfd == -1) {
++		return;
++	}
++	shutdown(sockfd, SHUT_RDWR); // unblock `ipc_socket_wait()`
++	while (atomic_load(&state->sockfd_pin) != 0)
++		sched_yield();
++	close(sockfd);
++	free(state->buffer);
++	*state = (struct ipc_socket){0};
++}
++
++static bool
++path_is_socket(const char path[const])
++{
++	struct stat result = {0};
++	return stat(path, &result) == 0 && S_ISSOCK(result.st_mode);
++}
++
++bool
++ipc_socket_connect(struct ipc_socket *const state, const char runtime_path[const], const char fallback_path[const])
++{
++	ipc_socket_destroy(state);
++	state->sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
++	if (state->sockfd == -1) {
++		U_LOG_IFL_E(state->log_level, "socket() failed");
++		return false;
++	}
++	struct sockaddr_un addr = {
++	    .sun_family = AF_UNIX,
++	};
++	ssize_t path_len = u_file_get_path_in_runtime_dir(runtime_path, addr.sun_path, sizeof(addr.sun_path));
++	if (path_len <= 0 || (size_t)path_len >= sizeof(addr.sun_path)) {
++		U_LOG_IFL_E(state->log_level, "u_file_get_path_in_runtime_dir() failed");
++		return false;
++	}
++	if (!path_is_socket(addr.sun_path)) {
++		const char *env;
++		if ((env = getenv("XDG_DATA_HOME")) != NULL) {
++			path_len = snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/%s", env, fallback_path);
++		} else if ((env = getenv("HOME")) != NULL) {
++			path_len =
++			    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/.local/share/%s", env, fallback_path);
++		} else {
++			path_len = 0;
++		}
++		if (path_len <= 0 || (size_t)path_len >= sizeof(addr.sun_path)) {
++			U_LOG_IFL_E(state->log_level, "failed to resolve SlimeVR socket path");
++			return false;
++		}
++		if (!path_is_socket(addr.sun_path)) {
++			U_LOG_IFL_E(state->log_level, "path not found");
++			return false;
++		}
++	}
++	if (connect(state->sockfd, (const struct sockaddr *)&addr, sizeof(addr)) != 0) {
++		U_LOG_IFL_E(state->log_level, "connect() failed: %s", strerror(errno));
++		return false;
++	}
++	return true;
++}
++
++bool
++ipc_socket_wait(struct ipc_socket *const state)
++{
++	atomic_fetch_add(&state->sockfd_pin, 1);
++	struct pollfd sockfd = {atomic_load(&state->sockfd), POLLIN, 0};
++	bool result = false;
++	if (sockfd.fd != -1) {
++		result = poll(&sockfd, 1, -1) != -1 || errno == EINTR;
++	}
++	atomic_fetch_sub(&state->sockfd_pin, 1);
++	return result;
++}
++
++bool
++ipc_socket_send(struct ipc_socket *const state, const uint8_t packet[const], const uint32_t packet_len)
++{
++	atomic_fetch_add(&state->sockfd_pin, 1);
++	const int sockfd = atomic_load(&state->sockfd);
++	if (sockfd == -1) {
++		atomic_fetch_sub(&state->sockfd_pin, 1);
++		return false;
++	}
++	const ssize_t result =
++	    sendmsg(sockfd,
++	            &(const struct msghdr){
++	                .msg_iov =
++	                    (struct iovec[2]){
++	                        {&(uint32_t){htole32(packet_len + sizeof(uint32_t))}, sizeof(uint32_t)},
++	                        {*(uint8_t **)&packet, packet_len},
++	                    },
++	                .msg_iovlen = 2,
++	            },
++	            MSG_NOSIGNAL);
++	atomic_fetch_sub(&state->sockfd_pin, 1);
++	return ((size_t)result == sizeof(uint32_t) + packet_len);
++}
++
++uint32_t
++ipc_socket_receive(struct ipc_socket *const state)
++{
++	atomic_fetch_add(&state->sockfd_pin, 1);
++	const int sockfd = atomic_load(&state->sockfd);
++	if (sockfd == -1) {
++		atomic_fetch_sub(&state->sockfd_pin, 1);
++		return 0;
++	}
++	if (state->head == state->buffer_len) {
++		uint32_t header = 0;
++		ssize_t length = recv(sockfd, &header, sizeof(header), MSG_PEEK | MSG_DONTWAIT);
++		if (length < 0 && errno != EAGAIN) {
++			U_LOG_IFL_E(state->log_level, "recv() failed: %s", strerror(errno));
++			goto fail;
++		}
++		if (length < (ssize_t)sizeof(header)) {
++			atomic_fetch_sub(&state->sockfd_pin, 1);
++			return 0;
++		}
++		length = recv(sockfd, &header, sizeof(header), MSG_DONTWAIT);
++		if (length != sizeof(header)) {
++			U_LOG_IFL_E(state->log_level, "recv() failed: %s",
++			            (length < 0) ? strerror(errno) : "bad length");
++			goto fail;
++		}
++		const uint32_t packet_length = le32toh(header) - 4;
++		if (packet_length > state->buffer_cap) {
++			if (packet_length > 0x100000) {
++				U_LOG_IFL_E(state->log_level, "packet too large");
++				goto fail;
++			}
++			uint8_t *const new_buffer = realloc(state->buffer, packet_length);
++			if (new_buffer == NULL) {
++				U_LOG_IFL_E(state->log_level, "realloc failed");
++				goto fail;
++			}
++			state->buffer = new_buffer;
++			state->buffer_cap = packet_length;
++		}
++		state->buffer_len = packet_length;
++		state->head = 0;
++		state->timestamp = (int64_t)os_monotonic_get_ns();
++	}
++	for (ssize_t length; state->head < state->buffer_len; state->head += (size_t)length) {
++		length = recv(sockfd, &state->buffer[state->head], state->buffer_len - state->head, MSG_DONTWAIT);
++		if (length < 0 && errno != EAGAIN) {
++			U_LOG_IFL_E(state->log_level, "recv() failed: %s", strerror(errno));
++			goto fail;
++		}
++		if (length <= 0) {
++			atomic_fetch_sub(&state->sockfd_pin, 1);
++			return 0;
++		}
++		if (length > state->buffer_len - state->head) {
++			U_LOG_IFL_E(state->log_level, "recv() returned invalid length");
++			goto fail;
++		}
++	}
++	atomic_fetch_sub(&state->sockfd_pin, 1);
++	return state->buffer_len;
++fail:
++	atomic_fetch_sub(&state->sockfd_pin, 1);
++	ipc_socket_destroy(state);
++	return 0;
++}
+diff --git a/src/xrt/drivers/solarxr/ipc_socket.h b/src/xrt/drivers/solarxr/ipc_socket.h
+new file mode 100644
+index 000000000..b9a1fee7a
+--- /dev/null
++++ b/src/xrt/drivers/solarxr/ipc_socket.h
+@@ -0,0 +1,28 @@
++// Copyright 2024, rcelyte
++// SPDX-License-Identifier: BSL-1.0
++
++#pragma once
++#include "util/u_logging.h"
++
++struct ipc_socket
++{
++	_Atomic(int) sockfd;
++	_Atomic(uint32_t) sockfd_pin;
++	enum u_logging_level log_level;
++	int64_t timestamp;
++	uint32_t head, buffer_len, buffer_cap;
++	uint8_t *buffer;
++};
++
++void
++ipc_socket_init(struct ipc_socket *state, enum u_logging_level log_level);
++void
++ipc_socket_destroy(struct ipc_socket *state); // threadsafe
++bool
++ipc_socket_connect(struct ipc_socket *state, const char runtime_path[], const char fallback_path[]);
++bool
++ipc_socket_wait(struct ipc_socket *state);
++bool
++ipc_socket_send(struct ipc_socket *state, const uint8_t packet[], uint32_t packet_len); // threadsafe
++uint32_t
++ipc_socket_receive(struct ipc_socket *state);
+diff --git a/src/xrt/drivers/solarxr/solarxr_device.c b/src/xrt/drivers/solarxr/solarxr_device.c
+new file mode 100644
+index 000000000..f7e89b1d1
+--- /dev/null
++++ b/src/xrt/drivers/solarxr/solarxr_device.c
+@@ -0,0 +1,946 @@
++// Copyright 2024, rcelyte
++// SPDX-License-Identifier: BSL-1.0
++
++#include "solarxr_device.h"
++#include "ipc_socket.h"
++
++// workaround for a name collision in header generated by FlatCC
++#define solarxr_protocol_rpc_SaveFileNotification_file_extension                                                       \
++	solarxr_protocol_rpc_SaveFileNotification_file_extension
++#include "solarxr_protocol.h"
++
++#include "math/m_relation_history.h"
++#include "math/m_vec3.h"
++#include "os/os_threading.h"
++#include "os/os_time.h"
++#include "util/u_debug.h"
++#include "util/u_device.h"
++
++#include "xrt/xrt_config_build.h" // TODO: drop `#ifdef XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META` guards once !2206 is merged
++
++#include <stdio.h>
++#include <stdatomic.h>
++#include <wchar.h>
++
++#define BodyPart_COUNT 55 // must be kept in sync with schema
++#define MAX_GENERIC_TRACKERS 32
++typedef uint32_t solarxr_trackerid_t;
++
++DEBUG_GET_ONCE_LOG_OPTION(solarxr_log, "SOLARXR_LOG", U_LOGGING_WARN)
++DEBUG_GET_ONCE_BOOL_OPTION(solarxr_raw_trackers, "SOLARXR_RAW_TRACKERS", false)
++DEBUG_GET_ONCE_NUM_OPTION(solarxr_sync_delay_ms, "SOLARXR_SYNC_DELAY_MS", 4)
++DEBUG_GET_ONCE_NUM_OPTION(solarxr_sync_timeout_ms, "SOLARXR_SYNC_TIMEOUT_MS", 50)
++
++struct solarxr_device;
++struct solarxr_generic_tracker
++{
++	struct xrt_device base;
++	struct m_relation_history *history;
++	solarxr_protocol_datatypes_BodyPart_enum_t role;
++	struct solarxr_device *parent;
++	struct solarxr_generic_tracker **weak_ref;
++};
++
++struct solarxr_device
++{
++	struct xrt_device base;
++	struct xrt_device *hmd; // this reference will be dangling in `solarxr_device_destroy()`
++	struct os_thread thread;
++	struct ipc_socket socket, feedback;
++	_Atomic(int64_t) next_sync, next_feedback;
++	struct os_mutex mutex;
++	_Atomic(int64_t) timestamp;
++	_Atomic(uint64_t) enabled_bones;
++	static_assert(BodyPart_COUNT <= 64, "bitfield too small");
++	struct solarxr_device_bone
++	{
++		struct xrt_pose pose;
++		float length;
++	} bones[BodyPart_COUNT];
++	solarxr_trackerid_t tracker_ids[MAX_GENERIC_TRACKERS];
++	struct solarxr_generic_tracker *trackers[MAX_GENERIC_TRACKERS];
++	uint32_t generation;
++	struct xrt_tracking_origin standalone_origin;
++	uint32_t poll_packet_len;
++	uint8_t poll_packet[];
++};
++
++static inline struct solarxr_device *
++solarxr_device(struct xrt_device *const xdev)
++{
++	return (struct solarxr_device *)xdev;
++}
++
++static inline struct solarxr_generic_tracker *
++solarxr_generic_tracker(struct xrt_device *const xdev)
++{
++	return (struct solarxr_generic_tracker *)xdev;
++}
++
++static void
++solarxr_device_send_feedback(struct solarxr_device *const device, const int64_t time)
++{
++	atomic_store(&device->next_feedback, time + debug_get_num_option_solarxr_sync_timeout_ms() * U_TIME_1MS_IN_NS);
++	struct xrt_space_relation head = {0};
++	if (device->hmd == NULL ||
++	    xrt_device_get_tracked_pose(device->hmd, XRT_INPUT_GENERIC_HEAD_POSE, time, &head) != XRT_SUCCESS ||
++	    head.relation_flags == 0) {
++		return;
++	}
++#define FLOAT_TO_BYTES(v) ((uint8_t *)&(v))[0], ((uint8_t *)&(v))[1], ((uint8_t *)&(v))[2], ((uint8_t *)&(v))[3]
++	const uint8_t pkt_position[39] = {
++	    (1 << 3) | 2, sizeof(pkt_position) - 2,
++	    (2 << 3) | 5, FLOAT_TO_BYTES(head.pose.position.x),
++	    (3 << 3) | 5, FLOAT_TO_BYTES(head.pose.position.y),
++	    (4 << 3) | 5, FLOAT_TO_BYTES(head.pose.position.z),
++	    (5 << 3) | 5, FLOAT_TO_BYTES(head.pose.orientation.x),
++	    (6 << 3) | 5, FLOAT_TO_BYTES(head.pose.orientation.y),
++	    (7 << 3) | 5, FLOAT_TO_BYTES(head.pose.orientation.z),
++	    (8 << 3) | 5, FLOAT_TO_BYTES(head.pose.orientation.w),
++	    (9 << 3) | 0, 0x03,
++	};
++#undef FLOAT_TO_BYTES
++	ipc_socket_send(&device->feedback, pkt_position, sizeof(pkt_position));
++}
++
++static void
++solarxr_device_sync(struct solarxr_device *const device)
++{
++	const int64_t time = os_monotonic_get_ns(), next_sync = atomic_exchange(&device->next_sync, INT64_MAX);
++	if (time <= next_sync) {
++		atomic_store(&device->next_sync, next_sync);
++		return;
++	}
++	solarxr_device_send_feedback(device, time);
++	ipc_socket_send(&device->socket, device->poll_packet, device->poll_packet_len);
++	atomic_store(&device->next_sync, time + debug_get_num_option_solarxr_sync_timeout_ms() * U_TIME_1MS_IN_NS);
++}
++
++static xrt_result_t
++solarxr_device_update_inputs(struct xrt_device *const xdev)
++{
++	struct solarxr_device *const device = solarxr_device(xdev);
++	const int64_t time = os_monotonic_get_ns();
++	if (time > atomic_load(&device->next_feedback)) {
++		// ensures SlimeVR continues to receive head positions even if no XR app is running
++		solarxr_device_send_feedback(device, time);
++	}
++
++	for (uint32_t i = 0; i < device->base.input_count; ++i) {
++		device->base.inputs[i].timestamp = atomic_load(&device->timestamp);
++	}
++	return XRT_SUCCESS;
++}
++
++static xrt_result_t
++solarxr_generic_tracker_update_inputs(struct xrt_device *const xdev)
++{
++	struct solarxr_generic_tracker *const device = solarxr_generic_tracker(xdev);
++	struct solarxr_device *const parent = device->parent;
++	device->base.inputs[0].active = (atomic_load(&parent->enabled_bones) & (1llu << device->role)) != 0;
++	device->base.inputs[0].timestamp = atomic_load(&parent->timestamp);
++	return XRT_SUCCESS;
++}
++
++static inline struct xrt_body_skeleton_joint_fb
++offset_joint(const struct xrt_body_skeleton_joint_fb parent, const int32_t name, const struct xrt_vec3 offset)
++{
++	return (struct xrt_body_skeleton_joint_fb){
++	    .pose =
++	        {
++	            .orientation = parent.pose.orientation,
++	            .position = m_vec3_add(parent.pose.position, offset),
++	        },
++	    .joint = name,
++	    .parent_joint = parent.joint,
++	};
++}
++
++// TODO: filter enabled bones
++static xrt_result_t
++solarxr_device_get_body_skeleton(struct xrt_device *const xdev,
++                                 const enum xrt_input_name body_tracking_type,
++                                 struct xrt_body_skeleton *const out_value)
++{
++	struct xrt_body_skeleton_joint_fb *joints;
++	uint32_t joint_count;
++	int32_t none;
++	switch (body_tracking_type) {
++	case XRT_INPUT_FB_BODY_TRACKING: {
++		joints = out_value->body_skeleton_fb.joints;
++		joint_count = ARRAY_SIZE(out_value->body_skeleton_fb.joints);
++		none = XRT_BODY_JOINT_NONE_FB;
++		break;
++	}
++#ifdef XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META
++	case XRT_INPUT_META_FULL_BODY_TRACKING: {
++		joints = out_value->full_body_skeleton_meta.joints;
++		joint_count = ARRAY_SIZE(out_value->full_body_skeleton_meta.joints);
++		none = XRT_FULL_BODY_JOINT_NONE_META;
++		break;
++	}
++#endif
++	default: return XRT_ERROR_NOT_IMPLEMENTED;
++	}
++
++	struct solarxr_device *const device = solarxr_device(xdev);
++	for (uint32_t i = 0; i < joint_count; ++i) {
++		joints[i] = (struct xrt_body_skeleton_joint_fb){XRT_POSE_IDENTITY, none, none};
++	}
++
++	// The spec doesn't define a particular layout for these joints beyond simply "a T-pose", so...
++	// clang-format off
++	joints[0] = (struct xrt_body_skeleton_joint_fb){XRT_POSE_IDENTITY, XRT_BODY_JOINT_HEAD_FB, XRT_BODY_JOINT_ROOT_FB};
++	joints[1] = offset_joint(joints[0], XRT_BODY_JOINT_NECK_FB, (struct xrt_vec3){0.f, -device->bones[solarxr_protocol_datatypes_BodyPart_NECK].length, 0.f});
++	joints[2] = offset_joint(joints[1], XRT_BODY_JOINT_CHEST_FB, (struct xrt_vec3){0.f, -device->bones[solarxr_protocol_datatypes_BodyPart_UPPER_CHEST].length, 0.f});
++	joints[3] = offset_joint(joints[2], XRT_BODY_JOINT_SPINE_UPPER_FB, (struct xrt_vec3){0.f, -device->bones[solarxr_protocol_datatypes_BodyPart_CHEST].length, 0.f});
++	joints[4] = offset_joint(joints[3], XRT_BODY_JOINT_SPINE_LOWER_FB, (struct xrt_vec3){0.f, -device->bones[solarxr_protocol_datatypes_BodyPart_WAIST].length, 0.f});
++	joints[5] = offset_joint(joints[4], XRT_BODY_JOINT_HIPS_FB, (struct xrt_vec3){0.f, -device->bones[solarxr_protocol_datatypes_BodyPart_HIP].length, 0.f});
++	joints[6] = offset_joint(joints[1], XRT_BODY_JOINT_LEFT_SHOULDER_FB, (struct xrt_vec3){-device->bones[solarxr_protocol_datatypes_BodyPart_LEFT_SHOULDER].length, 0.f, 0.f});
++	joints[7] = offset_joint(joints[1], XRT_BODY_JOINT_RIGHT_SHOULDER_FB, (struct xrt_vec3){device->bones[solarxr_protocol_datatypes_BodyPart_RIGHT_SHOULDER].length, 0.f, 0.f});
++	joints[8] = offset_joint(joints[6], XRT_BODY_JOINT_LEFT_ARM_UPPER_FB, (struct xrt_vec3){-device->bones[solarxr_protocol_datatypes_BodyPart_LEFT_UPPER_ARM].length, 0.f, 0.f});
++	joints[9] = offset_joint(joints[7], XRT_BODY_JOINT_RIGHT_ARM_UPPER_FB, (struct xrt_vec3){device->bones[solarxr_protocol_datatypes_BodyPart_RIGHT_UPPER_ARM].length, 0.f, 0.f});
++	joints[10] = offset_joint(joints[8], XRT_BODY_JOINT_LEFT_ARM_LOWER_FB, (struct xrt_vec3){-device->bones[solarxr_protocol_datatypes_BodyPart_LEFT_LOWER_ARM].length, 0.f, 0.f});
++	joints[11] = offset_joint(joints[9], XRT_BODY_JOINT_RIGHT_ARM_LOWER_FB, (struct xrt_vec3){device->bones[solarxr_protocol_datatypes_BodyPart_RIGHT_LOWER_ARM].length, 0.f, 0.f});
++	joints[12] = offset_joint(joints[10], XRT_BODY_JOINT_LEFT_HAND_WRIST_FB, (struct xrt_vec3){-device->bones[solarxr_protocol_datatypes_BodyPart_LEFT_HAND].length, 0.f, 0.f});
++	joints[13] = offset_joint(joints[11], XRT_BODY_JOINT_RIGHT_HAND_WRIST_FB, (struct xrt_vec3){device->bones[solarxr_protocol_datatypes_BodyPart_RIGHT_HAND].length, 0.f, 0.f});
++#ifdef XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META
++	if (body_tracking_type != XRT_INPUT_META_FULL_BODY_TRACKING) {
++		return XRT_SUCCESS;
++	}
++	joints[14] = offset_joint(joints[5], XRT_FULL_BODY_JOINT_LEFT_UPPER_LEG_META, (struct xrt_vec3){0.f, -device->bones[solarxr_protocol_datatypes_BodyPart_LEFT_UPPER_LEG].length, 0.f});
++	joints[15] = offset_joint(joints[5], XRT_FULL_BODY_JOINT_RIGHT_UPPER_LEG_META, (struct xrt_vec3){0.f, -device->bones[solarxr_protocol_datatypes_BodyPart_RIGHT_UPPER_LEG].length, 0.f});
++	joints[16] = offset_joint(joints[14], XRT_FULL_BODY_JOINT_LEFT_LOWER_LEG_META, (struct xrt_vec3){0.f, -device->bones[solarxr_protocol_datatypes_BodyPart_LEFT_LOWER_LEG].length, 0.f});
++	joints[17] = offset_joint(joints[15], XRT_FULL_BODY_JOINT_RIGHT_LOWER_LEG_META, (struct xrt_vec3){0.f, -device->bones[solarxr_protocol_datatypes_BodyPart_RIGHT_LOWER_LEG].length, 0.f});
++	joints[18] = offset_joint(joints[16], XRT_FULL_BODY_JOINT_LEFT_FOOT_TRANSVERSE_META, (struct xrt_vec3){0.f, 0.f, -device->bones[solarxr_protocol_datatypes_BodyPart_LEFT_FOOT].length});
++	joints[19] = offset_joint(joints[17], XRT_FULL_BODY_JOINT_RIGHT_FOOT_TRANSVERSE_META, (struct xrt_vec3){0.f, 0.f, -device->bones[solarxr_protocol_datatypes_BodyPart_RIGHT_FOOT].length});
++#endif
++	// clang-format on
++	return XRT_SUCCESS;
++}
++
++// TODO: filter enabled bones
++static xrt_result_t
++solarxr_device_get_body_joints(struct xrt_device *const xdev,
++                               const enum xrt_input_name body_tracking_type,
++                               const int64_t desired_timestamp_ns,
++                               struct xrt_body_joint_set *const out_value)
++{
++	static const uint32_t jointMap[BodyPart_COUNT] = {
++	    [solarxr_protocol_datatypes_BodyPart_HEAD] = XRT_BODY_JOINT_HEAD_FB,
++	    [solarxr_protocol_datatypes_BodyPart_NECK] = XRT_BODY_JOINT_NECK_FB,
++	    [solarxr_protocol_datatypes_BodyPart_CHEST] = XRT_BODY_JOINT_SPINE_UPPER_FB,
++	    [solarxr_protocol_datatypes_BodyPart_WAIST] = XRT_BODY_JOINT_SPINE_LOWER_FB,
++	    [solarxr_protocol_datatypes_BodyPart_HIP] = XRT_BODY_JOINT_HIPS_FB,
++#ifdef XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META
++	    [solarxr_protocol_datatypes_BodyPart_LEFT_UPPER_LEG] = XRT_FULL_BODY_JOINT_LEFT_UPPER_LEG_META,
++	    [solarxr_protocol_datatypes_BodyPart_RIGHT_UPPER_LEG] = XRT_FULL_BODY_JOINT_RIGHT_UPPER_LEG_META,
++	    [solarxr_protocol_datatypes_BodyPart_LEFT_LOWER_LEG] = XRT_FULL_BODY_JOINT_LEFT_LOWER_LEG_META,
++	    [solarxr_protocol_datatypes_BodyPart_RIGHT_LOWER_LEG] = XRT_FULL_BODY_JOINT_RIGHT_LOWER_LEG_META,
++	    [solarxr_protocol_datatypes_BodyPart_LEFT_FOOT] = XRT_FULL_BODY_JOINT_LEFT_FOOT_TRANSVERSE_META,
++	    [solarxr_protocol_datatypes_BodyPart_RIGHT_FOOT] = XRT_FULL_BODY_JOINT_RIGHT_FOOT_TRANSVERSE_META,
++#endif
++	    [solarxr_protocol_datatypes_BodyPart_LEFT_LOWER_ARM] = XRT_BODY_JOINT_LEFT_ARM_LOWER_FB,
++	    [solarxr_protocol_datatypes_BodyPart_RIGHT_LOWER_ARM] = XRT_BODY_JOINT_RIGHT_ARM_LOWER_FB,
++	    [solarxr_protocol_datatypes_BodyPart_LEFT_UPPER_ARM] = XRT_BODY_JOINT_LEFT_ARM_UPPER_FB,
++	    [solarxr_protocol_datatypes_BodyPart_RIGHT_UPPER_ARM] = XRT_BODY_JOINT_RIGHT_ARM_UPPER_FB,
++	    [solarxr_protocol_datatypes_BodyPart_LEFT_HAND] = XRT_BODY_JOINT_LEFT_HAND_WRIST_FB,
++	    [solarxr_protocol_datatypes_BodyPart_RIGHT_HAND] = XRT_BODY_JOINT_RIGHT_HAND_WRIST_FB,
++	    [solarxr_protocol_datatypes_BodyPart_LEFT_SHOULDER] = XRT_BODY_JOINT_LEFT_SHOULDER_FB,
++	    [solarxr_protocol_datatypes_BodyPart_RIGHT_SHOULDER] = XRT_BODY_JOINT_RIGHT_SHOULDER_FB,
++	    [solarxr_protocol_datatypes_BodyPart_UPPER_CHEST] = XRT_BODY_JOINT_CHEST_FB,
++	    // LEFT_HIP
++	    // RIGHT_HIP
++	};
++	struct xrt_body_joint_location_fb *joints;
++	uint32_t joint_count;
++	switch (body_tracking_type) {
++	case XRT_INPUT_FB_BODY_TRACKING: {
++		joints = out_value->body_joint_set_fb.joint_locations;
++		joint_count = ARRAY_SIZE(out_value->body_joint_set_fb.joint_locations);
++		break;
++	}
++#ifdef XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META
++	case XRT_INPUT_META_FULL_BODY_TRACKING: {
++		joints = out_value->full_body_joint_set_meta.joint_locations;
++		joint_count = ARRAY_SIZE(out_value->full_body_joint_set_meta.joint_locations);
++		break;
++	}
++#endif
++	default: return XRT_ERROR_NOT_IMPLEMENTED;
++	}
++
++	struct solarxr_device *const device = solarxr_device(xdev);
++	solarxr_device_sync(device);
++
++	os_mutex_lock(&device->mutex);
++	out_value->base_body_joint_set_meta.sample_time_ns = device->timestamp;
++	out_value->base_body_joint_set_meta.confidence = 1.f; // N/A
++	out_value->base_body_joint_set_meta.skeleton_changed_count = device->generation;
++	out_value->base_body_joint_set_meta.is_active = true;
++	for (uint32_t i = 0; i < joint_count; ++i) {
++		joints[i].relation = (struct xrt_space_relation)XRT_SPACE_RELATION_ZERO;
++	}
++	for (solarxr_protocol_datatypes_BodyPart_enum_t part = 0; part < ARRAY_SIZE(device->bones); ++part) {
++		const struct xrt_pose pose = device->bones[part].pose;
++		const uint32_t index = jointMap[part];
++		if (index == 0 || index >= joint_count ||
++		    memcmp(&pose.orientation, &(struct xrt_quat){0}, sizeof(struct xrt_quat)) == 0) {
++			continue;
++		}
++		joints[index].relation = (struct xrt_space_relation){
++		    .relation_flags = XRT_SPACE_RELATION_ORIENTATION_VALID_BIT | XRT_SPACE_RELATION_POSITION_VALID_BIT |
++		                      XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT |
++		                      XRT_SPACE_RELATION_POSITION_TRACKED_BIT,
++		    .pose = pose,
++		};
++	}
++	out_value->body_pose = (struct xrt_space_relation){
++	    .relation_flags = XRT_SPACE_RELATION_ORIENTATION_VALID_BIT | XRT_SPACE_RELATION_POSITION_VALID_BIT |
++	                      XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT | XRT_SPACE_RELATION_POSITION_TRACKED_BIT,
++	    .pose = XRT_POSE_IDENTITY,
++	};
++	os_mutex_unlock(&device->mutex);
++	return XRT_SUCCESS;
++}
++
++static inline struct xrt_quat
++convert_quat(const solarxr_protocol_datatypes_math_Quat_struct_t quat)
++{
++	return (struct xrt_quat){
++	    .x = solarxr_protocol_datatypes_math_Quat_x_get(quat),
++	    .y = solarxr_protocol_datatypes_math_Quat_y_get(quat),
++	    .z = solarxr_protocol_datatypes_math_Quat_z_get(quat),
++	    .w = solarxr_protocol_datatypes_math_Quat_w_get(quat),
++	};
++}
++
++static inline struct xrt_vec3
++convert_vec3(const solarxr_protocol_datatypes_math_Vec3f_struct_t vec)
++{
++	return (struct xrt_vec3){
++	    .x = solarxr_protocol_datatypes_math_Vec3f_x_get(vec),
++	    .y = solarxr_protocol_datatypes_math_Vec3f_y_get(vec),
++	    .z = solarxr_protocol_datatypes_math_Vec3f_z_get(vec),
++	};
++}
++
++static void
++solarxr_device_handle_trackers(struct solarxr_device *const device,
++                               const solarxr_protocol_data_feed_tracker_TrackerData_vec_t trackers)
++{
++	for (uint32_t i = 0, trackers_len = solarxr_protocol_data_feed_tracker_TrackerData_vec_len(trackers);
++	     i < trackers_len; ++i) {
++		const solarxr_protocol_data_feed_tracker_TrackerData_table_t tracker_data =
++		    solarxr_protocol_data_feed_tracker_TrackerData_vec_at(trackers, i);
++		const solarxr_protocol_datatypes_TrackerId_table_t id_table =
++		    solarxr_protocol_data_feed_tracker_TrackerData_tracker_id_get(tracker_data);
++		const solarxr_trackerid_t id = solarxr_protocol_datatypes_TrackerId_tracker_num_get(id_table) |
++		                               (solarxr_protocol_datatypes_TrackerId_device_id_is_present(id_table)
++		                                    ? (uint32_t)solarxr_protocol_datatypes_DeviceId_id_get(
++		                                          solarxr_protocol_datatypes_TrackerId_device_id_get(id_table))
++		                                          << 8
++		                                    : 0xffffff00u);
++		static_assert(sizeof(wchar_t) == sizeof(id), "Invalid datatype for `wmemchr()`");
++		const solarxr_trackerid_t *const match = (const solarxr_trackerid_t *)wmemchr(
++		    (const wchar_t *)device->tracker_ids, (wchar_t)id, ARRAY_SIZE(device->tracker_ids));
++		if (match == NULL) {
++			continue;
++		}
++		struct solarxr_generic_tracker *const tracker = device->trackers[match - device->tracker_ids];
++		if (tracker == NULL) {
++			continue;
++		}
++		struct xrt_space_relation relation = {.pose.orientation.w = 1};
++		if (solarxr_protocol_data_feed_tracker_TrackerData_rotation_is_present(tracker_data)) {
++			const solarxr_protocol_datatypes_math_Quat_struct_t rotation =
++			    solarxr_protocol_data_feed_tracker_TrackerData_rotation_get(tracker_data);
++			relation.relation_flags |=
++			    XRT_SPACE_RELATION_ORIENTATION_VALID_BIT | XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT;
++			relation.pose.orientation = convert_quat(rotation);
++		}
++		if (solarxr_protocol_data_feed_tracker_TrackerData_position_is_present(tracker_data)) {
++			relation.relation_flags |=
++			    XRT_SPACE_RELATION_POSITION_VALID_BIT | XRT_SPACE_RELATION_POSITION_TRACKED_BIT;
++			relation.pose.position =
++			    convert_vec3(solarxr_protocol_data_feed_tracker_TrackerData_position_get(tracker_data));
++		}
++		if (solarxr_protocol_data_feed_tracker_TrackerData_raw_angular_velocity_is_present(tracker_data)) {
++			relation.relation_flags |= XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT;
++			relation.angular_velocity = convert_vec3(
++			    solarxr_protocol_data_feed_tracker_TrackerData_raw_angular_velocity_get(tracker_data));
++		}
++		if (solarxr_protocol_data_feed_tracker_TrackerData_linear_acceleration_is_present(tracker_data)) {
++			relation.relation_flags |= XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT;
++			relation.linear_velocity = convert_vec3(
++			    solarxr_protocol_data_feed_tracker_TrackerData_linear_acceleration_get(tracker_data));
++		}
++		if (relation.relation_flags != 0) {
++			m_relation_history_push(tracker->history, &relation, device->socket.timestamp);
++		}
++	}
++}
++
++static void
++solarxr_device_handle_toggles(struct solarxr_device *const device,
++                              const solarxr_protocol_rpc_SteamVRTrackersSetting_table_t toggles)
++{
++	const bool waist = solarxr_protocol_rpc_SteamVRTrackersSetting_waist_get(toggles),
++	           chest = solarxr_protocol_rpc_SteamVRTrackersSetting_chest_get(toggles),
++	           left_foot = solarxr_protocol_rpc_SteamVRTrackersSetting_left_foot_get(toggles),
++	           right_foot = solarxr_protocol_rpc_SteamVRTrackersSetting_right_foot_get(toggles),
++	           left_knee = solarxr_protocol_rpc_SteamVRTrackersSetting_left_knee_get(toggles),
++	           right_knee = solarxr_protocol_rpc_SteamVRTrackersSetting_right_knee_get(toggles),
++	           left_elbow = solarxr_protocol_rpc_SteamVRTrackersSetting_left_elbow_get(toggles),
++	           right_elbow = solarxr_protocol_rpc_SteamVRTrackersSetting_right_elbow_get(toggles),
++	           left_hand = solarxr_protocol_rpc_SteamVRTrackersSetting_left_hand_get(toggles),
++	           right_hand = solarxr_protocol_rpc_SteamVRTrackersSetting_right_hand_get(toggles);
++	// `solarxr_protocol_datatypes_BodyPart_HEAD` always disabled
++	uint64_t bones = 1llu << solarxr_protocol_datatypes_BodyPart_NECK;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_CHEST) * chest;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_WAIST) * waist;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_HIP) * waist;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_LEFT_UPPER_LEG) * left_knee;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_RIGHT_UPPER_LEG) * right_knee;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_LEFT_LOWER_LEG) * (left_knee && left_foot);
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_RIGHT_LOWER_LEG) * (right_knee && right_foot);
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_LEFT_FOOT) * left_foot;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_RIGHT_FOOT) * right_foot;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_LEFT_LOWER_ARM) * (left_elbow && left_hand);
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_RIGHT_LOWER_ARM) * (right_elbow && right_hand);
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_LEFT_UPPER_ARM) * left_elbow;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_RIGHT_UPPER_ARM) * right_elbow;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_LEFT_HAND) * left_hand;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_RIGHT_HAND) * right_hand;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_LEFT_SHOULDER) * left_elbow;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_RIGHT_SHOULDER) * right_elbow;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_UPPER_CHEST) * chest;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_LEFT_HIP) * waist;
++	bones |= (1llu << solarxr_protocol_datatypes_BodyPart_RIGHT_HIP) * waist;
++	bones |= ((2llu << solarxr_protocol_datatypes_BodyPart_LEFT_LITTLE_DISTAL) -
++	          (1llu << solarxr_protocol_datatypes_BodyPart_LEFT_THUMB_PROXIMAL)) *
++	         left_hand;
++	bones |= ((2llu << solarxr_protocol_datatypes_BodyPart_RIGHT_LITTLE_DISTAL) -
++	          (1llu << solarxr_protocol_datatypes_BodyPart_RIGHT_THUMB_PROXIMAL)) *
++	         right_hand;
++	atomic_store(&device->enabled_bones, bones);
++}
++
++static solarxr_protocol_MessageBundle_table_t
++ipc_socket_receive_bundle(struct ipc_socket *const socket, const bool exit_on_error)
++{
++	do {
++		const uint32_t buffer_len = ipc_socket_receive(socket);
++		if (buffer_len == 0) {
++			continue;
++		}
++		const int result = solarxr_protocol_MessageBundle_verify_as_root(socket->buffer, buffer_len);
++		if (result == 0) {
++			return solarxr_protocol_MessageBundle_as_root(socket->buffer);
++		}
++		U_LOG_IFL_E(socket->log_level, "solarxr_protocol_MessageBundle_verify_as_root() failed: %s",
++		            flatcc_verify_error_string(result));
++#if 0 // dump packet
++		char hex[sizeof(socket->buffer) * 2];
++		for(uint32_t nibble = 0; nibble / 2 < buffer_len; ++nibble)
++			hex[nibble] = "0123456789abcdef"[socket->buffer[nibble / 2] >> ((nibble & 1) * 4) & 0xf];
++		U_LOG_IFL_E(socket->log_level, "    [%u] %.*s", buffer_len, buffer_len * 2, hex);
++#endif
++		if (exit_on_error) {
++			return NULL;
++		}
++	} while (ipc_socket_wait(socket));
++	if (exit_on_error) {
++		U_LOG_IFL_E(socket->log_level, "ipc_socket_receive() failed");
++	}
++	return NULL;
++}
++
++static void *
++solarxr_network_thread(void *const ptr)
++{
++	struct solarxr_device *const device = (struct solarxr_device *)ptr;
++	for (solarxr_protocol_MessageBundle_table_t bundle;
++	     (bundle = ipc_socket_receive_bundle(&device->socket, false)) != NULL;) {
++		const solarxr_protocol_rpc_RpcMessageHeader_vec_t rpcs =
++		    solarxr_protocol_MessageBundle_rpc_msgs_get(bundle);
++		if (rpcs != NULL) {
++			solarxr_protocol_rpc_SteamVRTrackersSetting_table_t toggles = NULL;
++			for (size_t i = 0, rpcs_len = solarxr_protocol_rpc_RpcMessageHeader_vec_len(rpcs); i < rpcs_len;
++			     ++i) {
++				const solarxr_protocol_rpc_RpcMessageHeader_table_t rpc =
++				    solarxr_protocol_rpc_RpcMessageHeader_vec_at(rpcs, i);
++				if (solarxr_protocol_rpc_RpcMessageHeader_message_type_get(rpc) ==
++				    solarxr_protocol_rpc_RpcMessage_SettingsResponse) {
++					toggles = solarxr_protocol_rpc_SettingsResponse_steam_vr_trackers_get(
++					    solarxr_protocol_rpc_RpcMessageHeader_message_get(rpc));
++				}
++			}
++			if (toggles != NULL) {
++				solarxr_device_handle_toggles(device, toggles);
++			}
++		}
++		const solarxr_protocol_data_feed_DataFeedMessageHeader_vec_t feeds =
++		    solarxr_protocol_MessageBundle_data_feed_msgs_get(bundle);
++		if (feeds == NULL) {
++			continue;
++		}
++#if 0 // for latency testing
++		U_LOG_IFL_W(device->socket.log_level, "%.3fus", ((int64_t)os_monotonic_get_ns() - (atomic_load(&device->next_sync) - debug_get_num_option_solarxr_sync_timeout_ms() * U_TIME_1MS_IN_NS)) / 1000.);
++#endif
++		atomic_store(&device->next_sync,
++		             device->timestamp + debug_get_num_option_solarxr_sync_delay_ms() * U_TIME_1MS_IN_NS);
++		solarxr_protocol_data_feed_device_data_DeviceData_vec_t devices = NULL;
++		solarxr_protocol_data_feed_tracker_TrackerData_vec_t synthetic = NULL;
++		solarxr_protocol_data_feed_Bone_vec_t bones = NULL;
++		for (size_t i = 0, feeds_len = solarxr_protocol_data_feed_DataFeedMessageHeader_vec_len(feeds);
++		     i < feeds_len; ++i) {
++			const solarxr_protocol_data_feed_DataFeedMessageHeader_table_t header =
++			    solarxr_protocol_data_feed_DataFeedMessageHeader_vec_at(feeds, i);
++			if (solarxr_protocol_data_feed_DataFeedMessageHeader_message_type_get(header) !=
++			    solarxr_protocol_data_feed_DataFeedMessage_DataFeedUpdate) {
++				continue;
++			}
++			solarxr_protocol_data_feed_DataFeedUpdate_table_t update =
++			    solarxr_protocol_data_feed_DataFeedMessageHeader_message_get(header);
++			bones = solarxr_protocol_data_feed_DataFeedUpdate_bones_get(update);
++			if (debug_get_bool_option_solarxr_raw_trackers()) {
++				devices = solarxr_protocol_data_feed_DataFeedUpdate_devices_get(update);
++			} else {
++				synthetic = solarxr_protocol_data_feed_DataFeedUpdate_synthetic_trackers_get(update);
++			}
++		}
++		os_mutex_lock(&device->mutex);
++		uint32_t i = 0, devices_len = 0;
++		if (synthetic != NULL) {
++			solarxr_device_handle_trackers(device, synthetic);
++		} else if (devices != NULL) {
++			for (devices_len = (uint32_t)solarxr_protocol_data_feed_device_data_DeviceData_vec_len(devices);
++			     i < devices_len; ++i) {
++				const solarxr_protocol_data_feed_device_data_DeviceData_table_t deviceData =
++				    solarxr_protocol_data_feed_device_data_DeviceData_vec_at(devices, i);
++				if (solarxr_protocol_data_feed_device_data_DeviceData_trackers_is_present(deviceData)) {
++					solarxr_device_handle_trackers(
++					    device,
++					    solarxr_protocol_data_feed_device_data_DeviceData_trackers_get(deviceData));
++				}
++			}
++		}
++		if (bones != NULL) {
++			const size_t bones_len = solarxr_protocol_data_feed_Bone_vec_len(bones);
++			atomic_store(&device->timestamp, device->socket.timestamp);
++			struct solarxr_device_bone newBones[ARRAY_SIZE(device->bones)] = {0};
++			for (size_t i = 0; i < bones_len; ++i) {
++				const solarxr_protocol_data_feed_Bone_table_t bone =
++				    solarxr_protocol_data_feed_Bone_vec_at(bones, i);
++				const solarxr_protocol_datatypes_BodyPart_enum_t part =
++				    solarxr_protocol_data_feed_Bone_body_part_get(bone);
++				if (part >= ARRAY_SIZE(device->bones)) {
++					static bool _once = false;
++					if (!_once) {
++						_once = true;
++						U_LOG_IFL_W(device->socket.log_level,
++						            "Unexpected SolarXR BodyPart %hhu", part);
++					}
++					continue;
++				}
++				newBones[part].pose = (struct xrt_pose){
++				    .orientation = convert_quat(solarxr_protocol_data_feed_Bone_rotation_g_get(bone)),
++				    .position = convert_vec3(solarxr_protocol_data_feed_Bone_head_position_g_get(bone)),
++				};
++				newBones[part].length = solarxr_protocol_data_feed_Bone_bone_length_get(bone);
++			}
++			for (uint32_t i = 0; i < ARRAY_SIZE(device->bones); ++i) {
++				if (memcmp(&newBones[i].length, &device->bones[i].length, sizeof(newBones[i].length)) ==
++				    0) {
++					continue;
++				}
++				++device->generation;
++				break;
++			}
++			memcpy(device->bones, newBones, sizeof(device->bones));
++		}
++		os_mutex_unlock(&device->mutex);
++	}
++	return NULL;
++}
++
++static void
++solarxr_device_destroy(struct xrt_device *xdev)
++{
++	struct solarxr_device *const device = solarxr_device(xdev);
++	ipc_socket_destroy(&device->feedback);
++	ipc_socket_destroy(&device->socket);
++	if (!pthread_equal(device->thread.thread, pthread_self())) {
++		os_thread_join(&device->thread);
++	}
++	for (uint32_t i = 0; i < ARRAY_SIZE(device->trackers); ++i) {
++		if (device->trackers[i] == NULL) {
++			continue;
++		}
++		device->trackers[i]->weak_ref = NULL;
++		device->trackers[i]->parent = NULL;
++	}
++	os_mutex_destroy(&device->mutex);
++	u_device_free(&device->base);
++}
++
++static xrt_result_t
++solarxr_generic_tracker_get_tracked_pose(struct xrt_device *const xdev,
++                                         const enum xrt_input_name name,
++                                         const int64_t at_timestamp_ns,
++                                         struct xrt_space_relation *const out_relation)
++{
++	struct solarxr_generic_tracker *const device = solarxr_generic_tracker(xdev);
++	struct solarxr_device *const parent = device->parent;
++	solarxr_device_sync(parent);
++	if ((atomic_load(&parent->enabled_bones) & (1llu << device->role)) == 0) {
++		*out_relation = (struct xrt_space_relation){0};
++		return XRT_ERROR_INPUT_UNSUPPORTED; // TODO: adding/removing devices at runtime
++	}
++	m_relation_history_get(device->history, at_timestamp_ns, out_relation);
++	return XRT_SUCCESS;
++}
++
++static void
++solarxr_generic_tracker_destroy(struct xrt_device *const xdev)
++{
++	struct solarxr_generic_tracker *const device = solarxr_generic_tracker(xdev);
++	if (device->weak_ref != NULL) {
++		os_mutex_lock(&device->parent->mutex);
++		*device->weak_ref = NULL;
++		os_mutex_unlock(&device->parent->mutex);
++	}
++	m_relation_history_destroy(&device->history);
++	u_device_free(&device->base);
++}
++
++uint32_t
++solarxr_device_create_xdevs(struct xrt_device *const hmd, struct xrt_device **const out_xdevs, uint32_t out_xdevs_cap)
++{
++	if (out_xdevs_cap == 0) {
++		return 0;
++	}
++	if (out_xdevs_cap - 1 > MAX_GENERIC_TRACKERS) {
++		out_xdevs_cap = 1 + MAX_GENERIC_TRACKERS;
++	}
++	flatcc_builder_t builder;
++	int result = flatcc_builder_init(&builder);
++	result = result || flatbuffers_buffer_start(&builder, solarxr_protocol_MessageBundle_file_identifier);
++	result = result || solarxr_protocol_MessageBundle_start(&builder);
++	result = result || solarxr_protocol_data_feed_DataFeedMessageHeader_start(&builder);
++	result = result || solarxr_protocol_data_feed_PollDataFeed_start(&builder);
++	result = result || solarxr_protocol_data_feed_DataFeedConfig_start(&builder);
++	if (out_xdevs_cap >= 2) {
++		result = result || solarxr_protocol_data_feed_tracker_TrackerDataMask_start(&builder);
++		result = result || solarxr_protocol_data_feed_tracker_TrackerDataMask_rotation_add(&builder, true);
++		result = result || solarxr_protocol_data_feed_tracker_TrackerDataMask_position_add(&builder, true);
++		result = result ||
++		         solarxr_protocol_data_feed_tracker_TrackerDataMask_raw_angular_velocity_add(&builder, true);
++		result = result ||
++		         solarxr_protocol_data_feed_tracker_TrackerDataMask_linear_acceleration_add(&builder, true);
++		const solarxr_protocol_data_feed_tracker_TrackerDataMask_ref_t trackerDataMask =
++		    solarxr_protocol_data_feed_tracker_TrackerDataMask_end(&builder);
++		if (debug_get_bool_option_solarxr_raw_trackers()) {
++			result = result || solarxr_protocol_data_feed_device_data_DeviceDataMask_start(&builder);
++			result = result || solarxr_protocol_data_feed_device_data_DeviceDataMask_tracker_data_add(
++			                       &builder, trackerDataMask);
++			result = result ||
++			         solarxr_protocol_data_feed_DataFeedConfig_data_mask_add(
++			             &builder, solarxr_protocol_data_feed_device_data_DeviceDataMask_end(&builder));
++		} else {
++			result = result || solarxr_protocol_data_feed_DataFeedConfig_synthetic_trackers_mask_add(
++			                       &builder, trackerDataMask);
++		}
++	}
++	result = result || solarxr_protocol_data_feed_DataFeedConfig_bone_mask_add(&builder, true);
++	result = result || solarxr_protocol_data_feed_PollDataFeed_config_add(
++	                       &builder, solarxr_protocol_data_feed_DataFeedConfig_end(&builder));
++	result = result || solarxr_protocol_data_feed_DataFeedMessageHeader_message_add_value(
++	                       &builder, solarxr_protocol_data_feed_DataFeedMessage_as_PollDataFeed(
++	                                     solarxr_protocol_data_feed_PollDataFeed_end(&builder)));
++	result = result || solarxr_protocol_data_feed_DataFeedMessageHeader_message_add_type(
++	                       &builder, solarxr_protocol_data_feed_DataFeedMessage_PollDataFeed);
++	result = result || solarxr_protocol_MessageBundle_data_feed_msgs_add(
++	                       &builder, solarxr_protocol_data_feed_DataFeedMessageHeader_vec_create(
++	                                     &builder,
++	                                     (solarxr_protocol_data_feed_DataFeedMessageHeader_ref_t[1]){
++	                                         solarxr_protocol_data_feed_DataFeedMessageHeader_end(&builder),
++	                                     },
++	                                     1));
++	result = result || !flatbuffers_buffer_end(&builder, solarxr_protocol_MessageBundle_end(&builder));
++	assert(result == 0);
++	size_t poll_packet_len = 0;
++	uint8_t *const poll_packet = flatcc_builder_get_direct_buffer(&builder, &poll_packet_len);
++
++#ifdef XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META
++	struct solarxr_device *const device =
++	    u_device_allocate(U_DEVICE_ALLOC_NO_FLAGS, sizeof(struct solarxr_device) + poll_packet_len, 2, 0);
++#else
++	struct solarxr_device *const device =
++	    u_device_allocate(U_DEVICE_ALLOC_NO_FLAGS, sizeof(struct solarxr_device) + poll_packet_len, 1, 0);
++#endif
++	device->base.name = XRT_DEVICE_FB_BODY_TRACKING;
++	device->base.device_type = XRT_DEVICE_TYPE_BODY_TRACKER;
++	strncpy(device->base.str, "SolarXR ipc Connection", sizeof(device->base.str) - 1);
++	strncpy(device->base.serial, "ws://localhost:21110", sizeof(device->base.serial) - 1);
++	if (hmd != NULL) {
++		device->base.tracking_origin = hmd->tracking_origin;
++	}
++	if (device->base.tracking_origin == NULL) {
++		device->base.tracking_origin = &device->standalone_origin;
++		device->standalone_origin = (struct xrt_tracking_origin){
++		    .name = "SolarXR Bridge",
++		    .type = XRT_TRACKING_TYPE_OTHER,
++		    .initial_offset = XRT_POSE_IDENTITY,
++		};
++	}
++	device->base.body_tracking_supported = true;
++	device->base.update_inputs = solarxr_device_update_inputs;
++	device->base.get_body_skeleton = solarxr_device_get_body_skeleton;
++	device->base.get_body_joints = solarxr_device_get_body_joints;
++	device->base.destroy = solarxr_device_destroy;
++	device->base.inputs[0].name = XRT_INPUT_FB_BODY_TRACKING;
++#ifdef XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META
++	device->base.inputs[1].name = XRT_INPUT_META_FULL_BODY_TRACKING;
++#endif
++	device->hmd = hmd;
++	device->thread.thread = pthread_self();
++	ipc_socket_init(&device->socket, debug_get_log_option_solarxr_log());
++	ipc_socket_init(&device->feedback, debug_get_log_option_solarxr_log());
++	os_mutex_init(&device->mutex);
++	memset(device->tracker_ids, 0xff, sizeof(device->tracker_ids));
++	device->poll_packet_len = poll_packet_len;
++	memcpy(device->poll_packet, poll_packet, poll_packet_len);
++
++	if (!ipc_socket_connect(&device->socket, "SlimeVRRpc", "slimevr/SlimeVRRpc")) {
++		goto fail;
++	}
++	if (hmd != NULL && !ipc_socket_connect(&device->feedback, "SlimeVRInput", "slimevr/SlimeVRInput")) {
++		goto fail;
++	}
++	if (out_xdevs_cap >= 2) {
++		result = flatcc_builder_reset(&builder);
++		result = result || flatbuffers_buffer_start(&builder, solarxr_protocol_MessageBundle_file_identifier);
++		result = result || solarxr_protocol_MessageBundle_start(&builder);
++		result = result || solarxr_protocol_data_feed_DataFeedMessageHeader_start(&builder);
++		result = result || solarxr_protocol_data_feed_PollDataFeed_start(&builder);
++		result = result || solarxr_protocol_data_feed_DataFeedConfig_start(&builder);
++		result = result || solarxr_protocol_data_feed_tracker_TrackerDataMask_start(&builder);
++		result = result || solarxr_protocol_data_feed_tracker_TrackerDataMask_info_add(&builder, true);
++		const solarxr_protocol_data_feed_tracker_TrackerDataMask_ref_t trackerDataMask =
++		    solarxr_protocol_data_feed_tracker_TrackerDataMask_end(&builder);
++		if (debug_get_bool_option_solarxr_raw_trackers()) {
++			result = result || solarxr_protocol_data_feed_device_data_DeviceDataMask_start(&builder);
++			result = result || solarxr_protocol_data_feed_device_data_DeviceDataMask_tracker_data_add(
++			                       &builder, trackerDataMask);
++			result = result ||
++			         solarxr_protocol_data_feed_DataFeedConfig_data_mask_add(
++			             &builder, solarxr_protocol_data_feed_device_data_DeviceDataMask_end(&builder));
++		} else {
++			result = result || solarxr_protocol_data_feed_DataFeedConfig_synthetic_trackers_mask_add(
++			                       &builder, trackerDataMask);
++		}
++		result = result || solarxr_protocol_data_feed_PollDataFeed_config_add(
++		                       &builder, solarxr_protocol_data_feed_DataFeedConfig_end(&builder));
++		result = result || solarxr_protocol_data_feed_DataFeedMessageHeader_message_add_value(
++		                       &builder, solarxr_protocol_data_feed_DataFeedMessage_as_PollDataFeed(
++		                                     solarxr_protocol_data_feed_PollDataFeed_end(&builder)));
++		result = result || solarxr_protocol_data_feed_DataFeedMessageHeader_message_add_type(
++		                       &builder, solarxr_protocol_data_feed_DataFeedMessage_PollDataFeed);
++		result = result || solarxr_protocol_MessageBundle_data_feed_msgs_add(
++		                       &builder, solarxr_protocol_data_feed_DataFeedMessageHeader_vec_create(
++		                                     &builder,
++		                                     (solarxr_protocol_data_feed_DataFeedMessageHeader_ref_t[1]){
++		                                         solarxr_protocol_data_feed_DataFeedMessageHeader_end(&builder),
++		                                     },
++		                                     1));
++		result = result || !flatbuffers_buffer_end(&builder, solarxr_protocol_MessageBundle_end(&builder));
++		assert(result == 0);
++		size_t packet_len = 0;
++		uint8_t *const packet = flatcc_builder_get_direct_buffer(&builder, &packet_len);
++		if (!ipc_socket_send(&device->socket, packet, (uint32_t)packet_len)) {
++			U_LOG_IFL_E(device->socket.log_level, "ipc_socket_send(PollDataFeed) failed");
++			goto fail;
++		}
++		const solarxr_protocol_MessageBundle_table_t bundle = ipc_socket_receive_bundle(&device->socket, true);
++		if (bundle == NULL) {
++			goto fail;
++		}
++		const solarxr_protocol_data_feed_DataFeedMessageHeader_vec_t feeds =
++		    solarxr_protocol_MessageBundle_data_feed_msgs_get(bundle);
++		if (feeds == NULL) {
++			U_LOG_IFL_E(device->socket.log_level, "Missing data feed");
++			goto fail;
++		}
++		if (solarxr_protocol_data_feed_DataFeedMessageHeader_vec_len(feeds) != 1) {
++			U_LOG_IFL_E(device->socket.log_level, "Unexpected data feed count");
++			goto fail;
++		}
++		const solarxr_protocol_data_feed_DataFeedMessageHeader_table_t header =
++		    solarxr_protocol_data_feed_DataFeedMessageHeader_vec_at(feeds, 0);
++		if (solarxr_protocol_data_feed_DataFeedMessageHeader_message_type_get(header) !=
++		    solarxr_protocol_data_feed_DataFeedMessage_DataFeedUpdate) {
++			U_LOG_IFL_E(device->socket.log_level, "Unexpected data feed message type");
++			goto fail;
++		}
++		solarxr_protocol_data_feed_DataFeedUpdate_table_t update =
++		    solarxr_protocol_data_feed_DataFeedMessageHeader_message_get(header);
++		uint32_t tracker_descs_len = 0;
++		solarxr_protocol_data_feed_tracker_TrackerData_table_t tracker_descs[ARRAY_SIZE(device->trackers)];
++		if (debug_get_bool_option_solarxr_raw_trackers()) {
++			const solarxr_protocol_data_feed_device_data_DeviceData_vec_t devices =
++			    solarxr_protocol_data_feed_DataFeedUpdate_devices_get(update);
++			if (devices != NULL) {
++				const uint32_t devices_len =
++				    (uint32_t)solarxr_protocol_data_feed_device_data_DeviceData_vec_len(devices);
++				for (uint32_t i = 0; i < devices_len; ++i) {
++					const solarxr_protocol_data_feed_device_data_DeviceData_table_t deviceData =
++					    solarxr_protocol_data_feed_device_data_DeviceData_vec_at(devices, i);
++					const solarxr_protocol_data_feed_tracker_TrackerData_vec_t trackers =
++					    solarxr_protocol_data_feed_device_data_DeviceData_trackers_get(deviceData);
++					if (trackers == NULL) {
++						continue;
++					}
++					for (uint32_t i = 0, trackers_len =
++					                         solarxr_protocol_data_feed_tracker_TrackerData_vec_len(
++					                             trackers);
++					     i < trackers_len && tracker_descs_len < ARRAY_SIZE(tracker_descs); ++i) {
++						tracker_descs[tracker_descs_len++] =
++						    solarxr_protocol_data_feed_tracker_TrackerData_vec_at(trackers, i);
++					}
++				}
++			}
++		} else {
++			const solarxr_protocol_data_feed_tracker_TrackerData_vec_t trackers =
++			    solarxr_protocol_data_feed_DataFeedUpdate_synthetic_trackers_get(update);
++			if (trackers != NULL) {
++				for (uint32_t i = 0,
++				              trackers_len =
++				                  solarxr_protocol_data_feed_tracker_TrackerData_vec_len(trackers);
++				     i < trackers_len && tracker_descs_len < ARRAY_SIZE(tracker_descs); ++i) {
++					tracker_descs[tracker_descs_len++] =
++					    solarxr_protocol_data_feed_tracker_TrackerData_vec_at(trackers, i);
++				}
++			}
++		}
++		if (tracker_descs_len > out_xdevs_cap - 1) {
++			tracker_descs_len = out_xdevs_cap - 1;
++		}
++		for (uint32_t i = 0; i < tracker_descs_len; ++i) {
++			const solarxr_protocol_datatypes_TrackerId_table_t id_table =
++			    solarxr_protocol_data_feed_tracker_TrackerData_tracker_id_get(tracker_descs[i]);
++			const solarxr_trackerid_t id =
++			    solarxr_protocol_datatypes_TrackerId_tracker_num_get(id_table) |
++			    (solarxr_protocol_datatypes_TrackerId_device_id_is_present(id_table)
++			         ? (uint32_t)solarxr_protocol_datatypes_DeviceId_id_get(
++			               solarxr_protocol_datatypes_TrackerId_device_id_get(id_table))
++			               << 8
++			         : 0xffffff00u);
++
++			struct solarxr_generic_tracker *const tracker =
++			    U_DEVICE_ALLOCATE(struct solarxr_generic_tracker, U_DEVICE_ALLOC_NO_FLAGS, 1, 0);
++			tracker->base.name = XRT_DEVICE_VIVE_TRACKER; // TODO: use different name here?
++			tracker->base.device_type = XRT_DEVICE_TYPE_GENERIC_TRACKER;
++			snprintf(tracker->base.str, sizeof(tracker->base.str), "SolarXR Tracker %04x", id);
++			snprintf(tracker->base.serial, sizeof(tracker->base.serial), "%04x", id);
++			tracker->base.tracking_origin = device->base.tracking_origin;
++			tracker->base.orientation_tracking_supported = true;
++			tracker->base.position_tracking_supported = true;
++			tracker->base.update_inputs = solarxr_generic_tracker_update_inputs;
++			tracker->base.get_tracked_pose = solarxr_generic_tracker_get_tracked_pose;
++			tracker->base.destroy = solarxr_generic_tracker_destroy;
++			tracker->base.inputs[0].name = XRT_INPUT_GENERIC_TRACKER_POSE;
++			m_relation_history_create(&tracker->history);
++			tracker->role = solarxr_protocol_datatypes_BodyPart_NONE;
++			tracker->parent = device;
++			tracker->weak_ref = &device->trackers[i];
++			device->trackers[i] = tracker;
++			device->tracker_ids[i] = id;
++
++			const solarxr_protocol_data_feed_tracker_TrackerInfo_table_t info =
++			    solarxr_protocol_data_feed_tracker_TrackerData_info_get(tracker_descs[i]);
++			if (info == NULL) {
++				continue;
++			}
++			const solarxr_protocol_datatypes_BodyPart_enum_t role =
++			    solarxr_protocol_data_feed_tracker_TrackerInfo_body_part_get(info);
++			if (role < ARRAY_SIZE(device->bones)) {
++				tracker->role = role;
++			}
++			const char *const name = solarxr_protocol_data_feed_tracker_TrackerInfo_display_name_get(info);
++			if (name != NULL) {
++				snprintf(tracker->base.str, sizeof(tracker->base.str), "SolarXR Tracker \"%s\"", name);
++			}
++		}
++	}
++	if (os_thread_start(&device->thread, solarxr_network_thread, device) != 0) {
++		U_LOG_IFL_E(device->socket.log_level, "pthread_create() failed");
++		for (uint32_t i = 0; i < ARRAY_SIZE(device->trackers); ++i) {
++			if (device->trackers[i] != NULL) {
++				solarxr_generic_tracker_destroy(&device->trackers[i]->base);
++			}
++		}
++		goto fail;
++	}
++	result = flatcc_builder_reset(&builder);
++	result = result || flatbuffers_buffer_start(&builder, solarxr_protocol_MessageBundle_file_identifier);
++	result = result || solarxr_protocol_MessageBundle_start(&builder);
++	result = result || solarxr_protocol_rpc_RpcMessageHeader_start(&builder);
++	result = result || solarxr_protocol_rpc_RpcMessageHeader_tx_id_add(&builder, 0);
++	result = result || solarxr_protocol_rpc_SettingsRequest_start(&builder);
++	result = result || solarxr_protocol_rpc_RpcMessageHeader_message_add_value(
++	                       &builder, solarxr_protocol_rpc_RpcMessage_as_SettingsRequest(
++	                                     solarxr_protocol_rpc_SettingsRequest_end(&builder)));
++	result = result || solarxr_protocol_rpc_RpcMessageHeader_message_add_type(
++	                       &builder, solarxr_protocol_rpc_RpcMessage_SettingsRequest);
++	result = result || solarxr_protocol_MessageBundle_rpc_msgs_add(
++	                       &builder, solarxr_protocol_rpc_RpcMessageHeader_vec_create(
++	                                     &builder,
++	                                     (solarxr_protocol_rpc_RpcMessageHeader_ref_t[1]){
++	                                         solarxr_protocol_rpc_RpcMessageHeader_end(&builder)},
++	                                     1));
++	result = result || !flatbuffers_buffer_end(&builder, solarxr_protocol_MessageBundle_end(&builder));
++	assert(result == 0);
++	size_t packet_len = 0;
++	uint8_t *const packet = flatcc_builder_get_direct_buffer(&builder, &packet_len);
++	if (!ipc_socket_send(&device->socket, packet, (uint32_t)packet_len)) {
++		U_LOG_IFL_E(device->socket.log_level, "ipc_socket_send(SettingsRequest) failed");
++		goto fail;
++	}
++	if (hmd != NULL) {
++		ipc_socket_send(&device->feedback,
++		                (uint8_t[28]){
++		                    (3 << 3) | 2, 26, // TrackerAdded
++		                    (2 << 3) | 2, 10,  'M', 'o', 'n', 'a',
++		                    'd',          'o', ' ', 'H', 'M', 'D', // tracker_serial = "Monado HMD"
++		                    (3 << 3) | 2, 10,  'M', 'o', 'n', 'a',
++		                    'd',          'o', ' ', 'H', 'M', 'D', // tracker_name = "Monado HMD"
++		                    (4 << 3) | 0, 19,                      // tracker_role = HMD
++		                },
++		                28);
++		ipc_socket_send(&device->feedback,
++		                (uint8_t[4]){
++		                    (4 << 3) | 2, 2, // TrackerStatus
++		                    (2 << 3) | 0, 1, // status = OK
++		                },
++		                4);
++	}
++	// early sync to initialize bone lengths needed by `solarxr_device_get_body_skeleton()`
++	solarxr_device_sync(device);
++	uint32_t trackerCount = 0;
++	out_xdevs[trackerCount++] = &device->base;
++	for (uint32_t i = 0; i < ARRAY_SIZE(device->trackers); ++i) {
++		if (device->trackers[i] == NULL) {
++			continue;
++		}
++		assert(trackerCount < out_xdevs_cap);
++		out_xdevs[trackerCount++] = &device->trackers[i]->base;
++	}
++	flatcc_builder_clear(&builder);
++	return trackerCount;
++fail:
++	flatcc_builder_clear(&builder);
++	solarxr_device_destroy(&device->base);
++	return 0;
++}
+diff --git a/src/xrt/drivers/solarxr/solarxr_device.h b/src/xrt/drivers/solarxr/solarxr_device.h
+new file mode 100644
+index 000000000..4bffdae29
+--- /dev/null
++++ b/src/xrt/drivers/solarxr/solarxr_device.h
+@@ -0,0 +1,33 @@
++// Copyright 2024, rcelyte
++// SPDX-License-Identifier: BSL-1.0
++/*!
++ * @file
++ * @brief  SolarXR protocol bridge device
++ * @ingroup drv_solarxr
++ */
++
++#pragma once
++
++#include <stdint.h>
++#include <stddef.h>
++struct xrt_device;
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++uint32_t
++solarxr_device_create_xdevs(struct xrt_device *hmd, struct xrt_device **out_xdevs, uint32_t out_xdevs_cap);
++
++static inline struct xrt_device *
++solarxr_device_create(struct xrt_device *const hmd)
++{
++	struct xrt_device *out = NULL;
++	solarxr_device_create_xdevs(hmd, &out, 1);
++	return out;
++}
++
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/xrt/targets/common/CMakeLists.txt b/src/xrt/targets/common/CMakeLists.txt
+index e2b9ba79d..1fbf5f436 100644
+--- a/src/xrt/targets/common/CMakeLists.txt
++++ b/src/xrt/targets/common/CMakeLists.txt
+@@ -201,6 +201,10 @@ if(XRT_BUILD_DRIVER_SIMULAVR)
+ 	target_link_libraries(target_lists PRIVATE drv_svr)
+ endif()
+ 
++if(XRT_BUILD_DRIVER_SOLARXR)
++	target_link_libraries(target_lists PRIVATE drv_solarxr)
++endif()
++
+ ####
+ # Instance
+ #
+-- 
+2.47.1
+

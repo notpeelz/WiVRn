@@ -1,7 +1,7 @@
-From a7ed0665c0a8f668d429f1e0ace03e25842b658b Mon Sep 17 00:00:00 2001
+From 666977666ca96869ff997140ab743996cacc7713 Mon Sep 17 00:00:00 2001
 From: Patrick Nicolas <patricknicolas@laposte.net>
 Date: Thu, 31 Oct 2024 23:16:09 +0100
-Subject: [PATCH] Revert "a/bindings: improve reproducibility of bindings
+Subject: [PATCH 13/14] Revert "a/bindings: improve reproducibility of bindings
  generation"
 
 This reverts commit d2fbd3ce8d962e4a46351df0f34f14de71871e00.
@@ -158,5 +158,5 @@ index f54a303f9..abcbfabe6 100644
          f.close()
  
 -- 
-2.47.0
+2.47.1
 

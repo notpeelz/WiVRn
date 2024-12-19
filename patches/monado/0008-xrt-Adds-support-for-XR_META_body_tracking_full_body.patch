@@ -1,0 +1,603 @@
+From bfa9e05371dc5885a66cd08b190c0893493544e2 Mon Sep 17 00:00:00 2001
+From: korejan <64199710+korejan@users.noreply.github.com>
+Date: Tue, 2 Apr 2024 17:54:05 +0100
+Subject: [PATCH 08/14] xrt: Adds support for XR_META_body_tracking_full_body
+ xrt-devices
+
+---
+ CMakeLists.txt                                |   5 +
+ scripts/generate_oxr_ext_support.py           |   1 +
+ scripts/mapping.imp                           |   1 +
+ src/xrt/compositor/multi/comp_multi_system.c  |   1 +
+ src/xrt/include/CMakeLists.txt                |  40 +++++++
+ src/xrt/include/xrt/xrt_compositor.h          |   1 +
+ .../include/xrt/xrt_config_build.h.cmake_in   |   1 +
+ src/xrt/include/xrt/xrt_defines.h             | 111 ++++++++++++++++++
+ src/xrt/include/xrt/xrt_instance.h            |   1 +
+ src/xrt/include/xrt/xrt_openxr_includes.h     |   4 +
+ src/xrt/ipc/server/ipc_server_handler.c       |   4 +
+ .../oxr/oxr_api_body_tracking.c               |   5 +
+ .../state_trackers/oxr/oxr_body_tracking.c    |  49 ++++++--
+ .../oxr/oxr_extension_support.h               |  13 ++
+ src/xrt/state_trackers/oxr/oxr_instance.c     |   3 +
+ src/xrt/state_trackers/oxr/oxr_objects.h      |   3 +
+ src/xrt/state_trackers/oxr/oxr_session.c      |   3 +
+ src/xrt/state_trackers/oxr/oxr_system.c       |  20 ++++
+ 18 files changed, 256 insertions(+), 10 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d2fb15f62..a445ac0d3 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -357,6 +357,10 @@ option(XRT_FEATURE_OPENXR_PERFORMANCE_SETTINGS "Enable XR_EXT_performance_settin
+ option(XRT_FEATURE_OPENXR_VISIBILITY_MASK "Enable XR_KHR_visibility_mask" ON)
+ option(XRT_FEATURE_OPENXR_VULKAN_SWAPCHAIN_FORMAT_LIST "Enable XR_KHR_vulkan_swapchain_format_list" ON)
+ option(XRT_FEATURE_OPENXR_XDEV_SPACE "Enable XR_MNDX_xdev_space" ON)
++option(XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META "Enable XR_META_body_tracking_full_body" ON)
++if(XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META)
++	set(XRT_FEATURE_OPENXR_BODY_TRACKING_FB ON)
++endif()
+ 
+ # Interaction extension support.
+ option(XRT_FEATURE_OPENXR_INTERACTION_EXT_EYE_GAZE "Enable XR_EXT_eye_gaze_interaction" ON)
+@@ -582,6 +586,7 @@ message(STATUS "#    FEATURE_DEBUG_GUI:                             ${XRT_FEATUR
+ message(STATUS "#    FEATURE_OPENXR:                                ${XRT_FEATURE_OPENXR}")
+ message(STATUS "#    FEATURE_OPENXR_ACTIVE_ACTION_SET_PRIORITY:     ${XRT_FEATURE_OPENXR_ACTIVE_ACTION_SET_PRIORITY}")
+ message(STATUS "#    FEATURE_OPENXR_BODY_TRACKING_FB:               ${XRT_FEATURE_OPENXR_BODY_TRACKING_FB}")
++message(STATUS "#    FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META:   ${XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META}")
+ message(STATUS "#    FEATURE_OPENXR_FACE_TRACKING2_FB:              ${XRT_FEATURE_OPENXR_FACE_TRACKING2_FB}")
+ message(STATUS "#    FEATURE_OPENXR_DEBUG_UTILS:                    ${XRT_FEATURE_OPENXR_DEBUG_UTILS}")
+ message(STATUS "#    FEATURE_OPENXR_DISPLAY_REFRESH_RATE:           ${XRT_FEATURE_OPENXR_DISPLAY_REFRESH_RATE}")
+diff --git a/scripts/generate_oxr_ext_support.py b/scripts/generate_oxr_ext_support.py
+index 56e996e39..6e464dda3 100755
+--- a/scripts/generate_oxr_ext_support.py
++++ b/scripts/generate_oxr_ext_support.py
+@@ -80,6 +80,7 @@ EXTENSIONS = (
+     ['XR_FB_touch_controller_pro', 'XRT_FEATURE_OPENXR_INTERACTION_TOUCH_PRO'],
+     ['XR_FB_touch_controller_proximity', 'XRT_FEATURE_OPENXR_INTERACTION_FB_PROXIMITY'],
+     ['XR_HTC_facial_tracking', 'XRT_FEATURE_OPENXR_FACIAL_TRACKING_HTC'],
++    ['XR_META_body_tracking_full_body', 'XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META'],
+     ['XR_META_touch_controller_plus', 'XRT_FEATURE_OPENXR_INTERACTION_TOUCH_PLUS'],
+     ['XR_ML_ml2_controller_interaction', 'XRT_FEATURE_OPENXR_INTERACTION_ML2'],
+     ['XR_MND_headless', 'XRT_FEATURE_OPENXR_HEADLESS'],
+diff --git a/scripts/mapping.imp b/scripts/mapping.imp
+index 3dd8b6866..c3c708333 100644
+--- a/scripts/mapping.imp
++++ b/scripts/mapping.imp
+@@ -34,6 +34,7 @@
+ { symbol: ["XRT_FEATURE_OPENXR", "public", "\"xrt/xrt_config_build.h\"", "public"] },
+ { symbol: ["XRT_FEATURE_OPENXR_ACTIVE_ACTION_SET_PRIORITY", "public", "\"xrt/xrt_config_build.h\"", "public"] },
+ { symbol: ["XRT_FEATURE_OPENXR_BODY_TRACKING_FB", "public", "\"xrt/xrt_config_build.h\"", "public"] },
++{ symbol: ["XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META", "public", "\"xrt/xrt_config_build.h\"", "public"] },
+ { symbol: ["XRT_FEATURE_OPENXR_DEBUG_UTILS", "public", "\"xrt/xrt_config_build.h\"", "public"] },
+ { symbol: ["XRT_FEATURE_OPENXR_DISPLAY_REFRESH_RATE", "public", "\"xrt/xrt_config_build.h\"", "public"] },
+ { symbol: ["XRT_FEATURE_OPENXR_FACE_TRACKING2_FB", "public", "\"xrt/xrt_config_build.h\"", "public"] },
+diff --git a/src/xrt/compositor/multi/comp_multi_system.c b/src/xrt/compositor/multi/comp_multi_system.c
+index db3b05ede..610042be0 100644
+--- a/src/xrt/compositor/multi/comp_multi_system.c
++++ b/src/xrt/compositor/multi/comp_multi_system.c
+@@ -430,6 +430,7 @@ update_session_state_locked(struct multi_system_compositor *msc)
+ 	    .htc_facial_tracking_enabled = false,
+ 	    .fb_body_tracking_enabled = false,
+ 	    .fb_face_tracking2_enabled = false,
++	    .meta_body_tracking_full_body_enabled = false,
+ 	};
+ 
+ 	switch (msc->sessions.state) {
+diff --git a/src/xrt/include/CMakeLists.txt b/src/xrt/include/CMakeLists.txt
+index 9bed415ce..d03ec50e5 100644
+--- a/src/xrt/include/CMakeLists.txt
++++ b/src/xrt/include/CMakeLists.txt
+@@ -7,3 +7,43 @@ add_library(xrt-interfaces INTERFACE)
+ target_include_directories(
+ 	xrt-interfaces INTERFACE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}
+ 	)
++
++if(XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META)
++	set(OCULUS_MOBILE_OPENXR_SDK_URL
++	    "https://securecdn.oculus.com/binaries/download/?id=7577210995650755"
++		)
++	include(FetchContent)
++	if(CMAKE_VERSION VERSION_LESS "3.24.0")
++		FetchContent_Declare(
++			oculussdk
++			URL ${OCULUS_MOBILE_OPENXR_SDK_URL}
++			    CONFIGURE_COMMAND
++			    ""
++			    BUILD_COMMAND
++			    ""
++			    EXCLUDE_FROM_ALL
++			)
++	else()
++		FetchContent_Declare(
++			oculussdk
++			URL ${OCULUS_MOBILE_OPENXR_SDK_URL}
++			    CONFIGURE_COMMAND
++			    ""
++			    BUILD_COMMAND
++			    ""
++			    DOWNLOAD_EXTRACT_TIMESTAMP
++			    TRUE
++			    EXCLUDE_FROM_ALL
++			)
++	endif()
++	FetchContent_GetProperties(oculussdk)
++	if(NOT oculussdk_POPULATED)
++		FetchContent_Populate(oculussdk)
++	endif()
++
++	add_library(oculussdk INTERFACE)
++	target_include_directories(oculussdk INTERFACE "${oculussdk_SOURCE_DIR}/OpenXR")
++
++	target_link_libraries(xrt-interfaces INTERFACE oculussdk)
++	target_compile_definitions(xrt-interfaces INTERFACE XRT_USE_META_EXT_HEADERS)
++endif()
+diff --git a/src/xrt/include/xrt/xrt_compositor.h b/src/xrt/include/xrt/xrt_compositor.h
+index 3ee40b169..29ce13e98 100644
+--- a/src/xrt/include/xrt/xrt_compositor.h
++++ b/src/xrt/include/xrt/xrt_compositor.h
+@@ -963,6 +963,7 @@ struct xrt_begin_session_info
+ 	bool htc_facial_tracking_enabled;
+ 	bool fb_body_tracking_enabled;
+ 	bool fb_face_tracking2_enabled;
++	bool meta_body_tracking_full_body_enabled;
+ };
+ 
+ /*!
+diff --git a/src/xrt/include/xrt/xrt_config_build.h.cmake_in b/src/xrt/include/xrt/xrt_config_build.h.cmake_in
+index ab14c1aa9..3777b5a8f 100644
+--- a/src/xrt/include/xrt/xrt_config_build.h.cmake_in
++++ b/src/xrt/include/xrt/xrt_config_build.h.cmake_in
+@@ -31,6 +31,7 @@
+ #cmakedefine XRT_FEATURE_OPENXR
+ #cmakedefine XRT_FEATURE_OPENXR_ACTIVE_ACTION_SET_PRIORITY
+ #cmakedefine XRT_FEATURE_OPENXR_BODY_TRACKING_FB
++#cmakedefine XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META
+ #cmakedefine XRT_FEATURE_OPENXR_DEBUG_UTILS
+ #cmakedefine XRT_FEATURE_OPENXR_DISPLAY_REFRESH_RATE
+ #cmakedefine XRT_FEATURE_OPENXR_FACE_TRACKING2_FB
+diff --git a/src/xrt/include/xrt/xrt_defines.h b/src/xrt/include/xrt/xrt_defines.h
+index f32a1c2b7..e1e7815ac 100644
+--- a/src/xrt/include/xrt/xrt_defines.h
++++ b/src/xrt/include/xrt/xrt_defines.h
+@@ -1146,6 +1146,7 @@ enum xrt_input_type
+ \
+ 	_(XRT_INPUT_GENERIC_BODY_TRACKING                  , XRT_INPUT_NAME(0x0700, BODY_TRACKING)) \
+ 	_(XRT_INPUT_FB_BODY_TRACKING                       , XRT_INPUT_NAME(0x0701, BODY_TRACKING)) \
++	_(XRT_INPUT_META_FULL_BODY_TRACKING                , XRT_INPUT_NAME(0x0702, BODY_TRACKING)) \
+ \
+ 	_(XRT_INPUT_PICO_NEO3_X_CLICK                      , XRT_INPUT_NAME(0x0800, BOOLEAN)) \
+ 	_(XRT_INPUT_PICO_NEO3_X_TOUCH                      , XRT_INPUT_NAME(0x0801, BOOLEAN)) \
+@@ -1731,11 +1732,104 @@ enum xrt_body_joint_fb
+ 	XRT_BODY_JOINT_NONE_FB = -1,
+ };
+ 
++// XR_META_body_tracking_full_body
++enum xrt_full_body_joint_meta
++{
++	XRT_FULL_BODY_JOINT_ROOT_META = 0,
++	XRT_FULL_BODY_JOINT_HIPS_META = 1,
++	XRT_FULL_BODY_JOINT_SPINE_LOWER_META = 2,
++	XRT_FULL_BODY_JOINT_SPINE_MIDDLE_META = 3,
++	XRT_FULL_BODY_JOINT_SPINE_UPPER_META = 4,
++	XRT_FULL_BODY_JOINT_CHEST_META = 5,
++	XRT_FULL_BODY_JOINT_NECK_META = 6,
++	XRT_FULL_BODY_JOINT_HEAD_META = 7,
++	XRT_FULL_BODY_JOINT_LEFT_SHOULDER_META = 8,
++	XRT_FULL_BODY_JOINT_LEFT_SCAPULA_META = 9,
++	XRT_FULL_BODY_JOINT_LEFT_ARM_UPPER_META = 10,
++	XRT_FULL_BODY_JOINT_LEFT_ARM_LOWER_META = 11,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_WRIST_TWIST_META = 12,
++	XRT_FULL_BODY_JOINT_RIGHT_SHOULDER_META = 13,
++	XRT_FULL_BODY_JOINT_RIGHT_SCAPULA_META = 14,
++	XRT_FULL_BODY_JOINT_RIGHT_ARM_UPPER_META = 15,
++	XRT_FULL_BODY_JOINT_RIGHT_ARM_LOWER_META = 16,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_WRIST_TWIST_META = 17,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_PALM_META = 18,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_WRIST_META = 19,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_THUMB_METACARPAL_META = 20,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_THUMB_PROXIMAL_META = 21,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_THUMB_DISTAL_META = 22,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_THUMB_TIP_META = 23,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_INDEX_METACARPAL_META = 24,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_INDEX_PROXIMAL_META = 25,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_INDEX_INTERMEDIATE_META = 26,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_INDEX_DISTAL_META = 27,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_INDEX_TIP_META = 28,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_MIDDLE_METACARPAL_META = 29,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_MIDDLE_PROXIMAL_META = 30,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_MIDDLE_INTERMEDIATE_META = 31,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_MIDDLE_DISTAL_META = 32,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_MIDDLE_TIP_META = 33,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_RING_METACARPAL_META = 34,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_RING_PROXIMAL_META = 35,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_RING_INTERMEDIATE_META = 36,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_RING_DISTAL_META = 37,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_RING_TIP_META = 38,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_LITTLE_METACARPAL_META = 39,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_LITTLE_PROXIMAL_META = 40,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_LITTLE_INTERMEDIATE_META = 41,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_LITTLE_DISTAL_META = 42,
++	XRT_FULL_BODY_JOINT_LEFT_HAND_LITTLE_TIP_META = 43,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_PALM_META = 44,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_WRIST_META = 45,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_THUMB_METACARPAL_META = 46,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_THUMB_PROXIMAL_META = 47,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_THUMB_DISTAL_META = 48,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_THUMB_TIP_META = 49,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_INDEX_METACARPAL_META = 50,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_INDEX_PROXIMAL_META = 51,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_INDEX_INTERMEDIATE_META = 52,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_INDEX_DISTAL_META = 53,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_INDEX_TIP_META = 54,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_MIDDLE_METACARPAL_META = 55,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_MIDDLE_PROXIMAL_META = 56,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_MIDDLE_INTERMEDIATE_META = 57,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_MIDDLE_DISTAL_META = 58,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_MIDDLE_TIP_META = 59,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_RING_METACARPAL_META = 60,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_RING_PROXIMAL_META = 61,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_RING_INTERMEDIATE_META = 62,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_RING_DISTAL_META = 63,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_RING_TIP_META = 64,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_LITTLE_METACARPAL_META = 65,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_LITTLE_PROXIMAL_META = 66,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_LITTLE_INTERMEDIATE_META = 67,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_LITTLE_DISTAL_META = 68,
++	XRT_FULL_BODY_JOINT_RIGHT_HAND_LITTLE_TIP_META = 69,
++	XRT_FULL_BODY_JOINT_LEFT_UPPER_LEG_META = 70,
++	XRT_FULL_BODY_JOINT_LEFT_LOWER_LEG_META = 71,
++	XRT_FULL_BODY_JOINT_LEFT_FOOT_ANKLE_TWIST_META = 72,
++	XRT_FULL_BODY_JOINT_LEFT_FOOT_ANKLE_META = 73,
++	XRT_FULL_BODY_JOINT_LEFT_FOOT_SUBTALAR_META = 74,
++	XRT_FULL_BODY_JOINT_LEFT_FOOT_TRANSVERSE_META = 75,
++	XRT_FULL_BODY_JOINT_LEFT_FOOT_BALL_META = 76,
++	XRT_FULL_BODY_JOINT_RIGHT_UPPER_LEG_META = 77,
++	XRT_FULL_BODY_JOINT_RIGHT_LOWER_LEG_META = 78,
++	XRT_FULL_BODY_JOINT_RIGHT_FOOT_ANKLE_TWIST_META = 79,
++	XRT_FULL_BODY_JOINT_RIGHT_FOOT_ANKLE_META = 80,
++	XRT_FULL_BODY_JOINT_RIGHT_FOOT_SUBTALAR_META = 81,
++	XRT_FULL_BODY_JOINT_RIGHT_FOOT_TRANSVERSE_META = 82,
++	XRT_FULL_BODY_JOINT_RIGHT_FOOT_BALL_META = 83,
++	XRT_FULL_BODY_JOINT_COUNT_META = 84,
++	XRT_FULL_BODY_JOINT_NONE_META = 85,
++};
++
+ enum xrt_body_joint_set_type_fb
+ {
+ 	XRT_BODY_JOINT_SET_UNKNOWN = 0,
+ 	// XR_FB_body_tracking
+ 	XRT_BODY_JOINT_SET_DEFAULT_FB,
++	// XR_Meta_body_tracking_full_body
++	XRT_BODY_JOINT_SET_FULL_BODY_META,
+ };
+ 
+ // XR_FB_body_tracking
+@@ -1753,12 +1847,20 @@ struct xrt_body_skeleton_fb
+ 	struct xrt_body_skeleton_joint_fb joints[XRT_BODY_JOINT_COUNT_FB];
+ };
+ 
++// XR_Meta_body_tracking_full_body
++struct xrt_full_body_skeleton_meta
++{
++	// ordered by xrt_full_body_joint_meta
++	struct xrt_body_skeleton_joint_fb joints[XRT_FULL_BODY_JOINT_COUNT_META];
++};
++
+ // structure is a container to represent the body skeleton in T-pose including the joint hierarchy,
+ // can have info such as skeleton scale and proportions
+ struct xrt_body_skeleton
+ {
+ 	union {
+ 		struct xrt_body_skeleton_fb body_skeleton_fb;
++		struct xrt_full_body_skeleton_meta full_body_skeleton_meta;
+ 	};
+ };
+ 
+@@ -1783,11 +1885,20 @@ struct xrt_body_joint_set_fb
+ 	struct xrt_body_joint_location_fb joint_locations[XRT_BODY_JOINT_COUNT_FB];
+ };
+ 
++// XR_Meta_body_tracking_full_body
++struct xrt_full_body_joint_set_meta
++{
++	struct xrt_base_body_joint_set_meta base;
++	// ordered by xrt_full_body_joint_meta
++	struct xrt_body_joint_location_fb joint_locations[XRT_FULL_BODY_JOINT_COUNT_META];
++};
++
+ struct xrt_body_joint_set
+ {
+ 	union {
+ 		struct xrt_base_body_joint_set_meta base_body_joint_set_meta;
+ 		struct xrt_body_joint_set_fb body_joint_set_fb;
++		struct xrt_full_body_joint_set_meta full_body_joint_set_meta;
+ 	};
+ 	// in driver global space, without tracking_origin offset
+ 	struct xrt_space_relation body_pose;
+diff --git a/src/xrt/include/xrt/xrt_instance.h b/src/xrt/include/xrt/xrt_instance.h
+index c9ee28ab0..701c98120 100644
+--- a/src/xrt/include/xrt/xrt_instance.h
++++ b/src/xrt/include/xrt/xrt_instance.h
+@@ -77,6 +77,7 @@ struct xrt_application_info
+ 	bool htc_facial_tracking_enabled;
+ 	bool fb_body_tracking_enabled;
+ 	bool fb_face_tracking2_enabled;
++	bool meta_body_tracking_full_body_enabled;
+ };
+ 
+ /*!
+diff --git a/src/xrt/include/xrt/xrt_openxr_includes.h b/src/xrt/include/xrt/xrt_openxr_includes.h
+index 522230e96..e3216acdc 100644
+--- a/src/xrt/include/xrt/xrt_openxr_includes.h
++++ b/src/xrt/include/xrt/xrt_openxr_includes.h
+@@ -67,3 +67,7 @@ typedef __eglMustCastToProperFunctionPointerType (*PFNEGLGETPROCADDRESSPROC)(con
+ #include "openxr/XR_MNDX_xdev_space.h"
+ #include "openxr/XR_MNDX_system_buttons.h"
+ #include "openxr/XR_MNDX_ball_on_a_stick_controller.h"
++
++#if defined(XRT_USE_META_EXT_HEADERS)
++#include "meta_openxr_preview/meta_body_tracking_full_body.h"
++#endif
+diff --git a/src/xrt/ipc/server/ipc_server_handler.c b/src/xrt/ipc/server/ipc_server_handler.c
+index b7d54e861..a19e03d52 100644
+--- a/src/xrt/ipc/server/ipc_server_handler.c
++++ b/src/xrt/ipc/server/ipc_server_handler.c
+@@ -326,6 +326,9 @@ ipc_handle_instance_describe_client(volatile struct ipc_client_state *ics,
+ #ifdef OXR_HAVE_FB_body_tracking
+ 	EXT(fb_body_tracking_enabled);
+ #endif
++#ifdef OXR_HAVE_META_body_tracking_full_body
++	EXT(meta_body_tracking_full_body_enabled);
++#endif
+ #ifdef OXR_HAVE_FB_face_tracking2
+ 	EXT(fb_face_tracking2_enabled);
+ #endif
+@@ -423,6 +426,7 @@ ipc_handle_session_begin(volatile struct ipc_client_state *ics)
+ 	    .htc_facial_tracking_enabled = ics->client_state.info.htc_facial_tracking_enabled,
+ 	    .fb_body_tracking_enabled = ics->client_state.info.fb_body_tracking_enabled,
+ 	    .fb_face_tracking2_enabled = ics->client_state.info.fb_face_tracking2_enabled,
++	    .meta_body_tracking_full_body_enabled = ics->client_state.info.meta_body_tracking_full_body_enabled,
+ 	};
+ 
+ 	return xrt_comp_begin_session(ics->xc, &begin_session_info);
+diff --git a/src/xrt/state_trackers/oxr/oxr_api_body_tracking.c b/src/xrt/state_trackers/oxr/oxr_api_body_tracking.c
+index 1a46d32db..36cd635d1 100644
+--- a/src/xrt/state_trackers/oxr/oxr_api_body_tracking.c
++++ b/src/xrt/state_trackers/oxr/oxr_api_body_tracking.c
+@@ -32,6 +32,11 @@ oxr_xrCreateBodyTrackerFB(XrSession session, const XrBodyTrackerCreateInfoFB *cr
+ 	OXR_VERIFY_SESSION_NOT_LOST(&log, sess);
+ 	OXR_VERIFY_ARG_TYPE_AND_NOT_NULL(&log, createInfo, XR_TYPE_BODY_TRACKER_CREATE_INFO_FB);
+ 	OXR_VERIFY_EXTENSION(&log, sess->sys->inst, FB_body_tracking);
++#ifdef OXR_HAVE_META_body_tracking_full_body
++	if (createInfo->bodyJointSet == XR_BODY_JOINT_SET_FULL_BODY_META) {
++		OXR_VERIFY_EXTENSION(&log, sess->sys->inst, META_body_tracking_full_body);
++	}
++#endif
+ 
+ 	struct oxr_body_tracker_fb *body_tracker_fb = NULL;
+ 	ret = oxr_create_body_tracker_fb(&log, sess, createInfo, &body_tracker_fb);
+diff --git a/src/xrt/state_trackers/oxr/oxr_body_tracking.c b/src/xrt/state_trackers/oxr/oxr_body_tracking.c
+index ff345a28b..6a9812464 100644
+--- a/src/xrt/state_trackers/oxr/oxr_body_tracking.c
++++ b/src/xrt/state_trackers/oxr/oxr_body_tracking.c
+@@ -23,6 +23,11 @@
+ static enum xrt_body_joint_set_type_fb
+ oxr_to_xrt_body_joint_set_type_fb(XrBodyJointSetFB joint_set_type)
+ {
++#ifdef OXR_HAVE_META_body_tracking_full_body
++	if (joint_set_type == XR_BODY_JOINT_SET_FULL_BODY_META) {
++		return XRT_BODY_JOINT_SET_FULL_BODY_META;
++	}
++#endif
+ 	if (joint_set_type == XR_BODY_JOINT_SET_DEFAULT_FB) {
+ 		return XRT_BODY_JOINT_SET_DEFAULT_FB;
+ 	}
+@@ -56,6 +61,15 @@ oxr_create_body_tracker_fb(struct oxr_logger *log,
+ 		                 "\"bodyJointSet\" set to an unknown body joint set type");
+ 	}
+ 
++#ifdef OXR_HAVE_META_body_tracking_full_body
++	if (joint_set_type == XRT_BODY_JOINT_SET_FULL_BODY_META) {
++		if (!oxr_system_get_full_body_tracking_meta_support(log, sess->sys->inst)) {
++			return oxr_error(log, XR_ERROR_FEATURE_UNSUPPORTED,
++			                 "System does not support META full body tracking");
++		}
++	}
++#endif
++
+ 	struct xrt_device *xdev = GET_XDEV_BY_ROLE(sess->sys, body);
+ 	if (xdev == NULL || !xdev->body_tracking_supported) {
+ 		return oxr_error(log, XR_ERROR_FEATURE_UNSUPPORTED, "No device found for body tracking role");
+@@ -84,25 +98,33 @@ oxr_get_body_skeleton_fb(struct oxr_logger *log,
+ 		                 "Device not found or does not support body tracking.");
+ 	}
+ 
+-	if (skeleton->jointCount < XRT_BODY_JOINT_COUNT_FB) {
++	const bool is_meta_full_body = body_tracker_fb->joint_set_type == XRT_BODY_JOINT_SET_FULL_BODY_META;
++	const uint32_t body_joint_count = is_meta_full_body ? XRT_FULL_BODY_JOINT_COUNT_META : XRT_BODY_JOINT_COUNT_FB;
++
++	if (skeleton->jointCount < body_joint_count) {
+ 		return oxr_error(log, XR_ERROR_VALIDATION_FAILURE, "joint count is too small");
+ 	}
+ 
+ 	struct xrt_body_skeleton body_skeleton_result = {0};
+-	struct xrt_body_skeleton_joint_fb *src_skeleton_joints = body_skeleton_result.body_skeleton_fb.joints;
++	struct xrt_body_skeleton_joint_fb *src_skeleton_joints =
++	    is_meta_full_body ? body_skeleton_result.full_body_skeleton_meta.joints
++	                      : body_skeleton_result.body_skeleton_fb.joints;
+ 
+-	if (xrt_device_get_body_skeleton(body_tracker_fb->xdev, XRT_INPUT_FB_BODY_TRACKING, &body_skeleton_result) !=
+-	    XRT_SUCCESS) {
++	const enum xrt_input_name input_name =
++	    is_meta_full_body ? XRT_INPUT_META_FULL_BODY_TRACKING : XRT_INPUT_FB_BODY_TRACKING;
++
++	if (xrt_device_get_body_skeleton(body_tracker_fb->xdev, input_name, &body_skeleton_result) != XRT_SUCCESS) {
+ 		return oxr_error(log, XR_ERROR_RUNTIME_FAILURE, "Failed to get body skeleton");
+ 	}
+ 
+-	for (size_t joint_index = 0; joint_index < XRT_BODY_JOINT_COUNT_FB; ++joint_index) {
++	for (size_t joint_index = 0; joint_index < body_joint_count; ++joint_index) {
+ 		const struct xrt_body_skeleton_joint_fb *src_skeleton_joint = &src_skeleton_joints[joint_index];
+ 		XrBodySkeletonJointFB *dst_skeleton_joint = &skeleton->joints[joint_index];
+ 		OXR_XRT_POSE_TO_XRPOSEF(src_skeleton_joint->pose, dst_skeleton_joint->pose);
+ 		dst_skeleton_joint->joint = src_skeleton_joint->joint;
+ 		dst_skeleton_joint->parentJoint = src_skeleton_joint->parent_joint;
+ 	}
++
+ 	return XR_SUCCESS;
+ }
+ 
+@@ -118,7 +140,10 @@ oxr_locate_body_joints_fb(struct oxr_logger *log,
+ 		                 "Device not found or does not support body tracking.");
+ 	}
+ 
+-	if (locations->jointCount < XRT_BODY_JOINT_COUNT_FB) {
++	const bool is_meta_full_body = body_tracker_fb->joint_set_type == XRT_BODY_JOINT_SET_FULL_BODY_META;
++	const uint32_t body_joint_count = is_meta_full_body ? XRT_FULL_BODY_JOINT_COUNT_META : XRT_BODY_JOINT_COUNT_FB;
++
++	if (locations->jointCount < body_joint_count) {
+ 		return oxr_error(log, XR_ERROR_VALIDATION_FAILURE, "joint count is too small");
+ 	}
+ 
+@@ -132,10 +157,14 @@ oxr_locate_body_joints_fb(struct oxr_logger *log,
+ 
+ 	struct xrt_body_joint_set body_joint_set_result = {0};
+ 	const struct xrt_body_joint_location_fb *src_body_joints =
+-	    body_joint_set_result.body_joint_set_fb.joint_locations;
++	    is_meta_full_body ? body_joint_set_result.full_body_joint_set_meta.joint_locations
++	                      : body_joint_set_result.body_joint_set_fb.joint_locations;
+ 
+-	if (xrt_device_get_body_joints(body_tracker_fb->xdev, XRT_INPUT_FB_BODY_TRACKING, at_timestamp_ns,
+-	                               &body_joint_set_result) != XRT_SUCCESS) {
++	const enum xrt_input_name input_name =
++	    is_meta_full_body ? XRT_INPUT_META_FULL_BODY_TRACKING : XRT_INPUT_FB_BODY_TRACKING;
++
++	if (xrt_device_get_body_joints(body_tracker_fb->xdev, input_name, at_timestamp_ns, &body_joint_set_result) !=
++	    XRT_SUCCESS) {
+ 		return oxr_error(log, XR_ERROR_RUNTIME_FAILURE, "Failed to get FB body joint set");
+ 	}
+ 
+@@ -164,7 +193,7 @@ oxr_locate_body_joints_fb(struct oxr_logger *log,
+ 	locations->confidence = body_joint_set_fb->confidence;
+ 	locations->skeletonChangedCount = body_joint_set_fb->skeleton_changed_count;
+ 
+-	for (size_t joint_index = 0; joint_index < XRT_BODY_JOINT_COUNT_FB; ++joint_index) {
++	for (size_t joint_index = 0; joint_index < body_joint_count; ++joint_index) {
+ 		const struct xrt_body_joint_location_fb *src_joint = &src_body_joints[joint_index];
+ 		XrBodyJointLocationFB *dst_joint = &locations->jointLocations[joint_index];
+ 
+diff --git a/src/xrt/state_trackers/oxr/oxr_extension_support.h b/src/xrt/state_trackers/oxr/oxr_extension_support.h
+index 538717eda..bcdae65c5 100644
+--- a/src/xrt/state_trackers/oxr/oxr_extension_support.h
++++ b/src/xrt/state_trackers/oxr/oxr_extension_support.h
+@@ -747,6 +747,18 @@
+ #define OXR_EXTENSION_SUPPORT_MNDX_xdev_space(_)
+ #endif
+ 
++
++/*
++ * XR_META_body_tracking_full_body
++ */
++#if defined(XR_META_body_tracking_full_body) && defined(XRT_FEATURE_OPENXR_BODY_TRACKING_FULL_BODY_META)
++#define OXR_HAVE_META_body_tracking_full_body
++#define OXR_EXTENSION_SUPPORT_META_body_tracking_full_body(_)                                                          \
++	_(META_body_tracking_full_body, META_BODY_TRACKING_FULL_BODY)
++#else
++#define OXR_EXTENSION_SUPPORT_META_body_tracking_full_body(_)
++#endif
++
+ // end of GENERATED per-extension defines - do not modify - used by scripts
+ 
+ /*!
+@@ -818,6 +830,7 @@
+     OXR_EXTENSION_SUPPORT_FB_touch_controller_pro(_) \
+     OXR_EXTENSION_SUPPORT_FB_touch_controller_proximity(_) \
+     OXR_EXTENSION_SUPPORT_HTC_facial_tracking(_) \
++    OXR_EXTENSION_SUPPORT_META_body_tracking_full_body(_) \
+     OXR_EXTENSION_SUPPORT_META_touch_controller_plus(_) \
+     OXR_EXTENSION_SUPPORT_ML_ml2_controller_interaction(_) \
+     OXR_EXTENSION_SUPPORT_MND_headless(_) \
+diff --git a/src/xrt/state_trackers/oxr/oxr_instance.c b/src/xrt/state_trackers/oxr/oxr_instance.c
+index 27a904182..235cdc23e 100644
+--- a/src/xrt/state_trackers/oxr/oxr_instance.c
++++ b/src/xrt/state_trackers/oxr/oxr_instance.c
+@@ -307,6 +307,9 @@ oxr_instance_create(struct oxr_logger *log,
+ #endif
+ #ifdef OXR_HAVE_FB_face_tracking2
+ 	    .fb_face_tracking2_enabled = extensions->FB_face_tracking2,
++#endif
++#ifdef OXR_HAVE_META_body_tracking_full_body
++	    .meta_body_tracking_full_body_enabled = extensions->META_body_tracking_full_body,
+ #endif
+ 	};
+ 	snprintf(i_info.app_info.application_name, sizeof(i_info.app_info.application_name), "%s",
+diff --git a/src/xrt/state_trackers/oxr/oxr_objects.h b/src/xrt/state_trackers/oxr/oxr_objects.h
+index a32f9e3f9..b37b647d8 100644
+--- a/src/xrt/state_trackers/oxr/oxr_objects.h
++++ b/src/xrt/state_trackers/oxr/oxr_objects.h
+@@ -1062,6 +1062,9 @@ oxr_system_get_face_tracking2_fb_support(struct oxr_logger *log,
+ bool
+ oxr_system_get_body_tracking_fb_support(struct oxr_logger *log, struct oxr_instance *inst);
+ 
++bool
++oxr_system_get_full_body_tracking_meta_support(struct oxr_logger *log, struct oxr_instance *inst);
++
+ /*
+  *
+  * oxr_event.cpp
+diff --git a/src/xrt/state_trackers/oxr/oxr_session.c b/src/xrt/state_trackers/oxr/oxr_session.c
+index 686d15247..d4f647318 100644
+--- a/src/xrt/state_trackers/oxr/oxr_session.c
++++ b/src/xrt/state_trackers/oxr/oxr_session.c
+@@ -249,6 +249,9 @@ oxr_session_begin(struct oxr_logger *log, struct oxr_session *sess, const XrSess
+ #endif
+ #ifdef OXR_HAVE_FB_face_tracking2
+ 		    .fb_face_tracking2_enabled = extensions->FB_face_tracking2,
++#endif
++#ifdef OXR_HAVE_META_body_tracking_full_body
++		    .meta_body_tracking_full_body_enabled = extensions->META_body_tracking_full_body,
+ #endif
+ 		};
+ 
+diff --git a/src/xrt/state_trackers/oxr/oxr_system.c b/src/xrt/state_trackers/oxr/oxr_system.c
+index e7248a522..495df083b 100644
+--- a/src/xrt/state_trackers/oxr/oxr_system.c
++++ b/src/xrt/state_trackers/oxr/oxr_system.c
+@@ -372,6 +372,12 @@ oxr_system_get_body_tracking_fb_support(struct oxr_logger *log, struct oxr_insta
+ 	return oxr_system_get_body_tracking_support(log, inst, XRT_INPUT_FB_BODY_TRACKING);
+ }
+ 
++bool
++oxr_system_get_full_body_tracking_meta_support(struct oxr_logger *log, struct oxr_instance *inst)
++{
++	return oxr_system_get_body_tracking_support(log, inst, XRT_INPUT_META_FULL_BODY_TRACKING);
++}
++
+ XrResult
+ oxr_system_get_properties(struct oxr_logger *log, struct oxr_system *sys, XrSystemProperties *properties)
+ {
+@@ -508,6 +514,20 @@ oxr_system_get_properties(struct oxr_logger *log, struct oxr_system *sys, XrSyst
+ 	}
+ #endif // OXR_HAVE_MNDX_xdev_space
+ 
++#ifdef OXR_HAVE_META_body_tracking_full_body
++	XrSystemPropertiesBodyTrackingFullBodyMETA *full_body_tracking_meta_props = NULL;
++	if (sys->inst->extensions.META_body_tracking_full_body) {
++		full_body_tracking_meta_props =
++		    OXR_GET_OUTPUT_FROM_CHAIN(properties, XR_TYPE_SYSTEM_PROPERTIES_BODY_TRACKING_FULL_BODY_META,
++		                              XrSystemPropertiesBodyTrackingFullBodyMETA);
++	}
++
++	if (full_body_tracking_meta_props) {
++		full_body_tracking_meta_props->supportsFullBodyTracking =
++		    oxr_system_get_full_body_tracking_meta_support(log, sys->inst);
++	}
++#endif // OXR_HAVE_META_body_tracking_full_body
++
+ 	return XR_SUCCESS;
+ }
+ 
+-- 
+2.47.1
+
