@@ -28,6 +28,9 @@ finish-args:
   # Set the active OpenXR / OpenVR runtime
   - --filesystem=xdg-config/openxr:create
   - --filesystem=xdg-config/openvr:create
+  # SlimeVR
+  - --filesystem=xdg-run/SlimeVRInput
+  - --filesystem=xdg-run/SlimeVRRpc
   # Let outside application access the WiVRn socket
   - --filesystem=xdg-run/wivrn:create
   - --own-name=io.github.wivrn.Server
@@ -371,6 +374,7 @@ modules:
       - -DWIVRN_USE_NVENC=ON
       - -DWIVRN_USE_VULKAN_ENCODE=ON
       - -DWIVRN_USE_PULSEAUDIO=OFF
+      - -DWIVRN_FEATURE_SOLARXR=ON
       - -DWIVRN_WERROR=ON
       - -DWIVRN_CHECK_CAPSYSNICE=OFF # Capabilities don't work inside flatpak
       - -DFETCHCONTENT_FULLY_DISCONNECTED=ON
