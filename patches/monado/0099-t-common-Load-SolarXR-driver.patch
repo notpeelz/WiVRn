@@ -1,0 +1,292 @@
+From 7114d99942608a2f02d45d64d8eac3e1c2ea739c Mon Sep 17 00:00:00 2001
+From: rcelyte <rcelyte@battletrains.org>
+Date: Fri, 23 Aug 2024 20:54:53 +0000
+Subject: [PATCH] t/common: Load SolarXR driver
+
+---
+ src/xrt/drivers/qwerty/qwerty_device.c        |  4 +++
+ .../common/target_builder_lighthouse.c        | 25 +++++++++++++++++
+ .../targets/common/target_builder_qwerty.c    | 25 +++++++++++++++++
+ .../targets/common/target_builder_rift_s.c    | 26 ++++++++++++++++++
+ .../targets/common/target_builder_steamvr.c   | 27 +++++++++++++++++++
+ src/xrt/targets/common/target_builder_wmr.c   | 25 +++++++++++++++++
+ 6 files changed, 132 insertions(+)
+
+diff --git a/src/xrt/drivers/qwerty/qwerty_device.c b/src/xrt/drivers/qwerty/qwerty_device.c
+index 8841413efd..127644bc8b 100644
+--- a/src/xrt/drivers/qwerty/qwerty_device.c
++++ b/src/xrt/drivers/qwerty/qwerty_device.c
+@@ -315,6 +315,8 @@ qwerty_hmd_create(void)
+ 
+ 	xd->inputs[0].name = XRT_INPUT_GENERIC_HEAD_POSE;
+ 
++	xd->orientation_tracking_supported = true;
++	xd->position_tracking_supported = true;
+ 	xd->update_inputs = u_device_noop_update_inputs;
+ 	xd->get_tracked_pose = qwerty_get_tracked_pose;
+ 	xd->get_view_poses = u_device_get_view_poses;
+@@ -367,6 +369,8 @@ qwerty_controller_create(bool is_left, struct qwerty_hmd *qhmd)
+ 	xd->binding_profiles = binding_profiles;
+ 	xd->binding_profile_count = ARRAY_SIZE(binding_profiles);
+ 
++	xd->orientation_tracking_supported = true;
++	xd->position_tracking_supported = true;
+ 	xd->update_inputs = qwerty_update_inputs;
+ 	xd->get_tracked_pose = qwerty_get_tracked_pose;
+ 	xd->set_output = qwerty_set_output;
+diff --git a/src/xrt/targets/common/target_builder_lighthouse.c b/src/xrt/targets/common/target_builder_lighthouse.c
+index 2386586be3..b8cbafdbed 100644
+--- a/src/xrt/targets/common/target_builder_lighthouse.c
++++ b/src/xrt/targets/common/target_builder_lighthouse.c
+@@ -58,6 +58,10 @@
+ #include "opengloves/opengloves_interface.h"
+ #endif
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++#include "solarxr/solarxr_interface.h"
++#endif
++
+ #if defined(XRT_BUILD_DRIVER_SURVIVE)
+ #define DEFAULT_DRIVER "survive"
+ #else
+@@ -509,6 +513,16 @@ try_add_opengloves(struct xrt_device *left,
+ #endif
+ }
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++static void
++destroy_system_devices_solarxr(struct xrt_system_devices *xsysd)
++{
++	solarxr_device_set_feeder_devices(xsysd->static_roles.body, NULL, 0);
++	u_system_devices_close(xsysd);
++	free(xsysd);
++}
++#endif
++
+ static xrt_result_t
+ lighthouse_open_system_impl(struct xrt_builder *xb,
+                             cJSON *config,
+@@ -736,6 +750,17 @@ end_valve_index:
+ 		try_add_opengloves(left, right, &left_ht, &right_ht);
+ 	}
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++	const uint32_t count = solarxr_device_create_xdevs(head->tracking_origin, &xsysd->xdevs[xsysd->xdev_count],
++	                                                   ARRAY_SIZE(xsysd->xdevs) - xsysd->xdev_count);
++	if (count != 0) {
++		xsysd->static_roles.body = xsysd->xdevs[xsysd->xdev_count];
++		solarxr_device_set_feeder_devices(xsysd->static_roles.body, xsysd->xdevs, xsysd->xdev_count);
++		xsysd->destroy = destroy_system_devices_solarxr;
++	}
++	xsysd->xdev_count += count;
++#endif
++
+ 	// Assign to role(s).
+ 	ubrh->head = head;
+ 	ubrh->left = left;
+diff --git a/src/xrt/targets/common/target_builder_qwerty.c b/src/xrt/targets/common/target_builder_qwerty.c
+index 2c66ad3038..5a5059ee18 100644
+--- a/src/xrt/targets/common/target_builder_qwerty.c
++++ b/src/xrt/targets/common/target_builder_qwerty.c
+@@ -18,6 +18,10 @@
+ 
+ #include "qwerty/qwerty_interface.h"
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++#include "solarxr/solarxr_interface.h"
++#endif
++
+ #include <assert.h>
+ 
+ 
+@@ -67,6 +71,16 @@ qwerty_estimate_system(struct xrt_builder *xb,
+ 	return XRT_SUCCESS;
+ }
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++static void
++destroy_system_devices_solarxr(struct xrt_system_devices *xsysd)
++{
++	solarxr_device_set_feeder_devices(xsysd->static_roles.body, NULL, 0);
++	u_system_devices_close(xsysd);
++	free(xsysd);
++}
++#endif
++
+ static xrt_result_t
+ qwerty_open_system_impl(struct xrt_builder *xb,
+                         cJSON *config,
+@@ -100,6 +114,17 @@ qwerty_open_system_impl(struct xrt_builder *xb,
+ 	ubrh->left = left;
+ 	ubrh->right = right;
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++	const uint32_t count = solarxr_device_create_xdevs(head->tracking_origin, &xsysd->xdevs[xsysd->xdev_count],
++	                                                   ARRAY_SIZE(xsysd->xdevs) - xsysd->xdev_count);
++	if (count != 0) {
++		xsysd->static_roles.body = xsysd->xdevs[xsysd->xdev_count];
++		solarxr_device_set_feeder_devices(xsysd->static_roles.body, xsysd->xdevs, xsysd->xdev_count);
++		xsysd->destroy = destroy_system_devices_solarxr;
++	}
++	xsysd->xdev_count += count;
++#endif
++
+ 	return XRT_SUCCESS;
+ }
+ 
+diff --git a/src/xrt/targets/common/target_builder_rift_s.c b/src/xrt/targets/common/target_builder_rift_s.c
+index 675b303228..bf5581688d 100644
+--- a/src/xrt/targets/common/target_builder_rift_s.c
++++ b/src/xrt/targets/common/target_builder_rift_s.c
+@@ -28,6 +28,10 @@
+ #include "ht_ctrl_emu/ht_ctrl_emu_interface.h"
+ #endif
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++#include "solarxr/solarxr_interface.h"
++#endif
++
+ #include "rift_s/rift_s_interface.h"
+ #include "rift_s/rift_s.h"
+ 
+@@ -92,6 +96,16 @@ rift_s_estimate_system(struct xrt_builder *xb,
+ 	return XRT_SUCCESS;
+ }
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++static void
++destroy_system_devices_solarxr(struct xrt_system_devices *xsysd)
++{
++	solarxr_device_set_feeder_devices(xsysd->static_roles.body, NULL, 0);
++	u_system_devices_close(xsysd);
++	free(xsysd);
++}
++#endif
++
+ static xrt_result_t
+ rift_s_open_system_impl(struct xrt_builder *xb,
+                         cJSON *config,
+@@ -200,6 +214,18 @@ rift_s_open_system_impl(struct xrt_builder *xb,
+ 	}
+ #endif
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++	const uint32_t count =
++	    solarxr_device_create_xdevs((hmd_xdev != NULL) ? hmd_xdev->tracking_origin : NULL,
++	                                &xsysd->xdevs[xsysd->xdev_count], ARRAY_SIZE(xsysd->xdevs) - xsysd->xdev_count);
++	if (count != 0) {
++		xsysd->static_roles.body = xsysd->xdevs[xsysd->xdev_count];
++		solarxr_device_set_feeder_devices(xsysd->static_roles.body, xsysd->xdevs, xsysd->xdev_count);
++		xsysd->destroy = destroy_system_devices_solarxr;
++	}
++	xsysd->xdev_count += count;
++#endif
++
+ 	// Assign to role(s).
+ 	ubrh->head = hmd_xdev;
+ 	ubrh->left = left_xdev;
+diff --git a/src/xrt/targets/common/target_builder_steamvr.c b/src/xrt/targets/common/target_builder_steamvr.c
+index 7b70e6b7c7..0267bb900d 100644
+--- a/src/xrt/targets/common/target_builder_steamvr.c
++++ b/src/xrt/targets/common/target_builder_steamvr.c
+@@ -34,6 +34,10 @@
+ #include "xrt/xrt_space.h"
+ #include "util/u_space_overseer.h"
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++#include "solarxr/solarxr_interface.h"
++#endif
++
+ #ifndef XRT_BUILD_DRIVER_STEAMVR_LIGHTHOUSE
+ #error "This builder requires the SteamVR Lighthouse driver"
+ #endif
+@@ -115,6 +119,17 @@ steamvr_destroy(struct xrt_builder *xb)
+ 	free(svrb);
+ }
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++static void
++destroy_system_devices_solarxr(struct xrt_system_devices *xsysd)
++{
++	void _Z7destroyP18xrt_system_devices(struct xrt_system_devices * xsysd);
++
++	solarxr_device_set_feeder_devices(xsysd->static_roles.body, NULL, 0);
++	_Z7destroyP18xrt_system_devices(xsysd);
++}
++#endif
++
+ static xrt_result_t
+ steamvr_open_system(struct xrt_builder *xb,
+                     cJSON *config,
+@@ -151,6 +166,18 @@ steamvr_open_system(struct xrt_builder *xb,
+ 	svrb->right_ht = u_system_devices_get_ht_device_right(xsysd);
+ 	xsysd->static_roles.hand_tracking.right = svrb->right_ht;
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++	const uint32_t count =
++	    solarxr_device_create_xdevs(xsysd->static_roles.head->tracking_origin, &xsysd->xdevs[xsysd->xdev_count],
++	                                ARRAY_SIZE(xsysd->xdevs) - xsysd->xdev_count);
++	if (count != 0) {
++		xsysd->static_roles.body = xsysd->xdevs[xsysd->xdev_count];
++		solarxr_device_set_feeder_devices(xsysd->static_roles.body, xsysd->xdevs, xsysd->xdev_count);
++		xsysd->destroy = destroy_system_devices_solarxr;
++	}
++	xsysd->xdev_count += count;
++#endif
++
+ 	/*
+ 	 * Space overseer.
+ 	 */
+diff --git a/src/xrt/targets/common/target_builder_wmr.c b/src/xrt/targets/common/target_builder_wmr.c
+index 40df6b6535..d543c441c2 100644
+--- a/src/xrt/targets/common/target_builder_wmr.c
++++ b/src/xrt/targets/common/target_builder_wmr.c
+@@ -26,6 +26,10 @@
+ 
+ #include <assert.h>
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++#include "solarxr/solarxr_interface.h"
++#endif
++
+ #ifndef XRT_BUILD_DRIVER_WMR
+ #error "Must only be built with XRT_BUILD_DRIVER_WMR set"
+ #endif
+@@ -175,6 +179,16 @@ wmr_estimate_system(struct xrt_builder *xb,
+ 	return XRT_SUCCESS;
+ }
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++static void
++destroy_system_devices_solarxr(struct xrt_system_devices *xsysd)
++{
++	solarxr_device_set_feeder_devices(xsysd->static_roles.body, NULL, 0);
++	u_system_devices_close(xsysd);
++	free(xsysd);
++}
++#endif
++
+ static xrt_result_t
+ wmr_open_system_impl(struct xrt_builder *xb,
+                      cJSON *config,
+@@ -295,6 +309,17 @@ wmr_open_system_impl(struct xrt_builder *xb,
+ 		right = ht_right;
+ 	}
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++	const uint32_t count = solarxr_device_create_xdevs(head->tracking_origin, &xsysd->xdevs[xsysd->xdev_count],
++	                                                   ARRAY_SIZE(xsysd->xdevs) - xsysd->xdev_count);
++	if (count != 0) {
++		xsysd->static_roles.body = xsysd->xdevs[xsysd->xdev_count];
++		solarxr_device_set_feeder_devices(xsysd->static_roles.body, xsysd->xdevs, xsysd->xdev_count);
++		xsysd->destroy = destroy_system_devices_solarxr;
++	}
++	xsysd->xdev_count += count;
++#endif
++
+ 
+ 	// Assign to role(s).
+ 	ubrh->head = head;
+-- 
+GitLab
+
