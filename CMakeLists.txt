@@ -46,7 +46,7 @@ set(OVR_COMPAT_SEARCH_PATH "/usr/local/lib/OpenComposite:/usr/lib/OpenComposite:
 
 option(WIVRN_FEATURE_DEBUG_GUI "Enable Monado debug GUI" OFF)
 option(WIVRN_FEATURE_RENDERDOC "Support renderdoc" OFF)
-set(WIVRN_FEATURE_SOLARXR OFF) # Will be added back when merged in upstream Monado
+option(WIVRN_FEATURE_SOLARXR "Enable SolarXR driver" OFF)
 option(WIVRN_FEATURE_STEAMVR_LIGHTHOUSE "Enable SteamVR Lighthouse driver" OFF)
 
 option(WIVRN_CHECK_CAPSYSNICE "Check if CAP_SYS_NICE is available at startup" ON)

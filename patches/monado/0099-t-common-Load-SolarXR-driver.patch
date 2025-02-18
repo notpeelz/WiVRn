@@ -1,0 +1,107 @@
+From 58df0e58ffaeddf9f7d87bf71b7a5383b58b724e Mon Sep 17 00:00:00 2001
+From: rcelyte <rcelyte@battletrains.org>
+Date: Fri, 23 Aug 2024 20:54:53 +0000
+Subject: [PATCH 11/11] t/common: Load SolarXR driver
+
+---
+ src/xrt/targets/common/target_builder_lighthouse.c | 13 +++++++++++++
+ src/xrt/targets/common/target_builder_qwerty.c     | 13 +++++++++++++
+ src/xrt/targets/common/target_builder_steamvr.c    | 13 +++++++++++++
+ 3 files changed, 39 insertions(+)
+
+diff --git a/src/xrt/targets/common/target_builder_lighthouse.c b/src/xrt/targets/common/target_builder_lighthouse.c
+index f58782ff6..65c873a76 100644
+--- a/src/xrt/targets/common/target_builder_lighthouse.c
++++ b/src/xrt/targets/common/target_builder_lighthouse.c
+@@ -58,6 +58,10 @@
+ #include "opengloves/opengloves_interface.h"
+ #endif
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++#include "solarxr/solarxr_device.h"
++#endif
++
+ #if defined(XRT_BUILD_DRIVER_SURVIVE)
+ #define DEFAULT_DRIVER "survive"
+ #else
+@@ -736,6 +740,15 @@ end_valve_index:
+ 		try_add_opengloves(left, right, &left_ht, &right_ht);
+ 	}
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++	const uint32_t count = solarxr_device_create_xdevs(head, &xsysd->xdevs[xsysd->xdev_count],
++	                                                   ARRAY_SIZE(xsysd->xdevs) - xsysd->xdev_count);
++	if (count != 0) {
++		xsysd->static_roles.body = xsysd->xdevs[xsysd->xdev_count];
++	}
++	xsysd->xdev_count += count;
++#endif
++
+ 	// Assign to role(s).
+ 	ubrh->head = head;
+ 	ubrh->left = left;
+diff --git a/src/xrt/targets/common/target_builder_qwerty.c b/src/xrt/targets/common/target_builder_qwerty.c
+index 2c66ad303..26d96aa14 100644
+--- a/src/xrt/targets/common/target_builder_qwerty.c
++++ b/src/xrt/targets/common/target_builder_qwerty.c
+@@ -18,6 +18,10 @@
+ 
+ #include "qwerty/qwerty_interface.h"
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++#include "solarxr/solarxr_device.h"
++#endif
++
+ #include <assert.h>
+ 
+ 
+@@ -100,6 +104,15 @@ qwerty_open_system_impl(struct xrt_builder *xb,
+ 	ubrh->left = left;
+ 	ubrh->right = right;
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++	const uint32_t count = solarxr_device_create_xdevs(head, &xsysd->xdevs[xsysd->xdev_count],
++	                                                   ARRAY_SIZE(xsysd->xdevs) - xsysd->xdev_count);
++	if (count != 0) {
++		xsysd->static_roles.body = xsysd->xdevs[xsysd->xdev_count];
++	}
++	xsysd->xdev_count += count;
++#endif
++
+ 	return XRT_SUCCESS;
+ }
+ 
+diff --git a/src/xrt/targets/common/target_builder_steamvr.c b/src/xrt/targets/common/target_builder_steamvr.c
+index 7b70e6b7c..f9af2722a 100644
+--- a/src/xrt/targets/common/target_builder_steamvr.c
++++ b/src/xrt/targets/common/target_builder_steamvr.c
+@@ -34,6 +34,10 @@
+ #include "xrt/xrt_space.h"
+ #include "util/u_space_overseer.h"
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++#include "solarxr/solarxr_device.h"
++#endif
++
+ #ifndef XRT_BUILD_DRIVER_STEAMVR_LIGHTHOUSE
+ #error "This builder requires the SteamVR Lighthouse driver"
+ #endif
+@@ -151,6 +155,15 @@ steamvr_open_system(struct xrt_builder *xb,
+ 	svrb->right_ht = u_system_devices_get_ht_device_right(xsysd);
+ 	xsysd->static_roles.hand_tracking.right = svrb->right_ht;
+ 
++#ifdef XRT_BUILD_DRIVER_SOLARXR
++	const uint32_t count = solarxr_device_create_xdevs(xsysd->static_roles.head, &xsysd->xdevs[xsysd->xdev_count],
++	                                                   ARRAY_SIZE(xsysd->xdevs) - xsysd->xdev_count);
++	if (count != 0) {
++		xsysd->static_roles.body = xsysd->xdevs[xsysd->xdev_count];
++	}
++	xsysd->xdev_count += count;
++#endif
++
+ 	/*
+ 	 * Space overseer.
+ 	 */
+-- 
+2.48.1
+
