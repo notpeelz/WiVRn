@@ -1,0 +1,58 @@
+From a487ba3906e2be9cfe06cd51ab8aa91b7c61c31e Mon Sep 17 00:00:00 2001
+From: Simon Zeni <simon.zeni@collabora.com>
+Date: Thu, 4 Sep 2025 11:51:28 -0400
+Subject: [PATCH 3/4] xrt: xrt: add destroy event to xrt_device
+
+---
+ src/xrt/include/xrt/xrt_device.h | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/src/xrt/include/xrt/xrt_device.h b/src/xrt/include/xrt/xrt_device.h
+index 15a46207a..ddc9e8434 100644
+--- a/src/xrt/include/xrt/xrt_device.h
++++ b/src/xrt/include/xrt/xrt_device.h
+@@ -1,4 +1,4 @@
+-// Copyright 2019-2024, Collabora, Ltd.
++// Copyright 2019-2025, Collabora, Ltd.
+ // Copyright 2024-2025, NVIDIA CORPORATION.
+ // SPDX-License-Identifier: BSL-1.0
+ /*!
+@@ -13,9 +13,10 @@
+ #pragma once
+ 
+ #include "xrt/xrt_defines.h"
++#include "xrt/xrt_limits.h"
+ #include "xrt/xrt_plane_detector.h"
++#include "xrt/xrt_signal.h"
+ #include "xrt/xrt_visibility_mask.h"
+-#include "xrt/xrt_limits.h"
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -314,6 +315,13 @@ struct xrt_device
+ 	//! What features/functions/things does this device supports?
+ 	struct xrt_device_supported supported;
+ 
++	//! Signals emitted by the device
++	struct
++	{
++		//! Emitted on xrt_device_destroy
++		struct xrt_signal destroy;
++	} events;
++
+ 
+ 	/*
+ 	 *
+@@ -1062,6 +1070,9 @@ xrt_device_destroy(struct xrt_device **xdev_ptr)
+ 		return;
+ 	}
+ 
++	xrt_signal_emit(&xdev->events.destroy, NULL);
++	assert(xrt_list_empty(&xdev->events.destroy.listeners));
++
+ 	xdev->destroy(xdev);
+ 	*xdev_ptr = NULL;
+ }
+-- 
+2.51.0
+

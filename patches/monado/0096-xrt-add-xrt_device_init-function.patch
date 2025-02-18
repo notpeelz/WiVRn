@@ -1,0 +1,61 @@
+From ac3996d3cc6bb9b0ade862654166bc232096c65b Mon Sep 17 00:00:00 2001
+From: Simon Zeni <simon.zeni@collabora.com>
+Date: Thu, 4 Sep 2025 11:54:58 -0400
+Subject: [PATCH 4/4] xrt: add xrt_device_init function
+
+---
+ src/xrt/auxiliary/util/u_device.c |  2 ++
+ src/xrt/include/xrt/xrt_device.h  | 11 +++++++++++
+ tests/tests_cxx_wrappers.cpp      |  1 +
+ 3 files changed, 14 insertions(+)
+
+diff --git a/src/xrt/auxiliary/util/u_device.c b/src/xrt/auxiliary/util/u_device.c
+index 748adcfe3..21a6d3db4 100644
+--- a/src/xrt/auxiliary/util/u_device.c
++++ b/src/xrt/auxiliary/util/u_device.c
+@@ -326,6 +326,8 @@ u_device_allocate(enum u_device_alloc_flags flags, size_t size, size_t input_cou
+ 		snprintf(xdev->tracking_origin->name, XRT_TRACKING_NAME_LEN, "%s", "No tracking");
+ 	}
+ 
++	xrt_device_init(xdev);
++
+ 	return xdev;
+ }
+ 
+diff --git a/src/xrt/include/xrt/xrt_device.h b/src/xrt/include/xrt/xrt_device.h
+index ddc9e8434..065a5e881 100644
+--- a/src/xrt/include/xrt/xrt_device.h
++++ b/src/xrt/include/xrt/xrt_device.h
+@@ -697,6 +697,17 @@ struct xrt_device
+ 	// Add new functions above destroy.
+ };
+ 
++/*!
++ * Initializes the common fields of a @ref xrt_device
++ *
++ * @public @memberof xrt_device
++ */
++static inline void
++xrt_device_init(struct xrt_device *xdev)
++{
++	xrt_signal_init(&xdev->events.destroy);
++}
++
+ /*!
+  * Helper function for @ref xrt_device::update_inputs.
+  *
+diff --git a/tests/tests_cxx_wrappers.cpp b/tests/tests_cxx_wrappers.cpp
+index 7dd36b6af..408975795 100644
+--- a/tests/tests_cxx_wrappers.cpp
++++ b/tests/tests_cxx_wrappers.cpp
+@@ -21,6 +21,7 @@ struct silly_device
+ 	silly_device(bool &destroyed_) : destroyed(&destroyed_)
+ 	{
+ 		base.destroy = [](xrt_device *xdev) { delete reinterpret_cast<silly_device *>(xdev); };
++		xrt_device_init(&base);
+ 	}
+ 	~silly_device()
+ 	{
+-- 
+2.51.0
+
