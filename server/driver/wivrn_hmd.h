@@ -42,13 +42,6 @@ class wivrn_hmd : public xrt_device
 	        .name = XRT_INPUT_GENERIC_HEAD_POSE,
 	};
 	xrt_hmd_parts hmd_parts{};
-	xrt_tracking_origin tracking_origin{
-	        .name = "WiVRn origin",
-	        .type = XRT_TRACKING_TYPE_OTHER,
-	        .initial_offset = {
-	                .orientation = {0, 0, 0, 1},
-	        },
-	};
 
 	view_list views;
 	from_headset::battery battery{};
@@ -66,6 +59,15 @@ class wivrn_hmd : public xrt_device
 
 public:
 	using base = xrt_device;
+
+	xrt_tracking_origin tracking_origin{
+	        .name = "WiVRn origin",
+	        .type = XRT_TRACKING_TYPE_OTHER,
+	        .initial_offset = {
+	                .orientation = {0, 0, 0, 1},
+	        },
+	};
+
 	wivrn_hmd(wivrn::wivrn_session * cnx,
 	          const from_headset::headset_info_packet & info);
 
