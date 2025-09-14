@@ -565,6 +565,8 @@ wivrn_controller::wivrn_controller(int hand_id,
         inputs_array(input_count, xrt_input{}),
         cnx(cnx)
 {
+	xrt_device_init(static_cast<xrt_device *>(this));
+
 	inputs = inputs_array.data();
 
 	// Setup input.

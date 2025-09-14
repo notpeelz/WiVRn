@@ -57,6 +57,7 @@ wivrn_eye_tracker::wivrn_eye_tracker(xrt_device * hmd) :
         },
         gaze(device_id::EYE_GAZE)
 {
+	xrt_device_init(static_cast<xrt_device *>(this));
 }
 
 xrt_result_t wivrn_eye_tracker::update_inputs()

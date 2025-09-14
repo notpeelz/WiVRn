@@ -60,6 +60,7 @@ wivrn_fb_face2_tracker::wivrn_fb_face2_tracker(xrt_device * hmd,
         },
         cnx(cnx)
 {
+	xrt_device_init(static_cast<xrt_device *>(this));
 }
 
 xrt_result_t wivrn_fb_face2_tracker::update_inputs()

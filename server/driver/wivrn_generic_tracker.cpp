@@ -124,6 +124,8 @@ wivrn_generic_tracker::wivrn_generic_tracker(int index, xrt_device * hmd, wivrn_
         cnx(cnx),
         index(index)
 {
+	xrt_device_init(static_cast<xrt_device *>(this));
+
 	auto unique_name = std::format("WiVRn Generic Tracker #{}", index + 1);
 	strlcpy(str, unique_name.c_str(), std::size(str));
 	auto unique_serial = std::format("wivrn-{}", index + 1);
