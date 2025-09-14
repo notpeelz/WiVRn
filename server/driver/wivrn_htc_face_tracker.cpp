@@ -66,6 +66,8 @@ wivrn_htc_face_tracker::wivrn_htc_face_tracker(xrt_device * hmd,
         },
         cnx(cnx)
 {
+	xrt_device_init(static_cast<xrt_device *>(this));
+
 	inputs = inputs_array.data();
 	input_count = inputs_array.size();
 }

@@ -88,6 +88,8 @@ wivrn_hmd::wivrn_hmd(wivrn::wivrn_session * cnx,
         },
         cnx(cnx)
 {
+	xrt_device_init(static_cast<xrt_device *>(this));
+
 	const auto config = configuration();
 
 	auto eye_width = info.recommended_eye_width;
