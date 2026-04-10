@@ -720,6 +720,9 @@ struct stop_application
 	uint32_t id;
 };
 
+struct switch_controllers
+{};
+
 // when changing this, also make sure there are handlers in wivrn_session, etc. or compilation will fail
 using packets = std::variant<
         crypto_handshake,
@@ -751,7 +754,8 @@ using packets = std::variant<
         set_active_application,
         hid::input,
         stop_application,
-        foveation>;
+        foveation,
+        switch_controllers>;
 } // namespace from_headset
 
 namespace to_headset
