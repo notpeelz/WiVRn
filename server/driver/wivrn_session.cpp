@@ -1000,7 +1000,7 @@ void wivrn_session::operator()(to_monado::set_bitrate && data)
 	compositor.set_bitrate(data.bitrate_bps);
 }
 
-void wivrn_session::operator()(to_monado::switch_hand_source &&)
+void wivrn_session::operator()(from_headset::switch_controllers &&)
 {
 	std::lock_guard lock(roles_mutex);
 

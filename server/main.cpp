@@ -695,9 +695,9 @@ gboolean on_handle_disable_pairing(WivrnServer * skeleton, GDBusMethodInvocation
 	return G_SOURCE_CONTINUE;
 }
 
-gboolean on_handle_switch_hand_source(WivrnServer * skeleton, GDBusMethodInvocation * invocation, gpointer user_data)
+gboolean on_handle_switch_controllers(WivrnServer * skeleton, GDBusMethodInvocation * invocation, gpointer user_data)
 {
-	wivrn_ipc_socket_main_loop->send(to_monado::switch_hand_source{});
+	wivrn_ipc_socket_main_loop->send(wivrn::from_headset::switch_controllers{});
 
 	g_dbus_method_invocation_return_value(invocation, nullptr);
 	return G_SOURCE_CONTINUE;
@@ -873,7 +873,7 @@ void on_name_acquired(GDBusConnection * connection, const gchar * name, gpointer
 		                 NULL);
 	}
 
-	g_signal_connect(dbus_server, "handle-switch-hand-source", G_CALLBACK(on_handle_switch_hand_source), NULL);
+	g_signal_connect(dbus_server, "handle-switch-controllers", G_CALLBACK(on_handle_switch_controllers), NULL);
 
 	g_signal_connect(dbus_server, "handle-set-client-tab", G_CALLBACK(on_handle_set_client_tab), NULL);
 
