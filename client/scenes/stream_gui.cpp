@@ -1041,6 +1041,8 @@ void scenes::stream::draw_gui(XrTime predicted_display_time, XrDuration predicte
 				next_gui_status = stream_tab::overlay_only;
 			if (wivrn::ui::nav_item(ICON_FA_MINIMIZE, _cS("tab label", "Compact view"), false))
 				next_gui_status = stream_tab::compact;
+			if (wivrn::ui::nav_item(ICON_FA_GAMEPAD, _cS("tab label", "Switch controllers"), false))
+				network_session->send_control(from_headset::switch_controllers{});
 		}
 		wivrn::ui::end_sidebar();
 
