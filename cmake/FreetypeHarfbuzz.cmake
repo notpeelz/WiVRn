@@ -1,5 +1,6 @@
 
 if (WIVRN_USE_SYSTEM_FREETYPE)
+    set(CMAKE_FIND_PACKAGE_RESOLVE_SYMLINKS ON)
     find_package(Freetype REQUIRED)
     find_package(harfbuzz REQUIRED)
 
